@@ -43,9 +43,23 @@ function HamsterGather:OnInitialize()
       resources = {
         herb = {
           show = true,
-          sameDistance = 5, -- 认定为同一刷新点的距离
+          sameDistancePower2 = 2, -- 认定为同一刷新点的距离
           data = {
             -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}},
+          },
+        },
+        mine = {
+          show = true,
+          sameDistancePower2 = 3,
+          data = {
+            -- [map_id] = { [mineral_id] = {{x,y, gather_time, gather_char_name}, ...}}},
+          },
+        },
+        fish = {
+          show = true,
+          sameDistancePower2 = 5,
+          data = {
+            -- [map_id] = { [fish_id] = {{x,y, gather_time, gather_char_name}, ...}}},
           },
         },
       },
@@ -167,7 +181,7 @@ function HamsterGather:OnEvent(event, ...)
     else
       count = 1
     end
-    self:handleResourceGathered(self.current.spellCat, looter, tonumber(itemId), count)
+    self:handleResourceGathered(self.current.spellCat, tonumber(itemId), count)
   end
 end
 
@@ -182,21 +196,40 @@ function HamsterGather:resetLootTimer(spellCat)
   end)
 end
 
-function HamsterGather:handleResourceGathered(spellCat, looter, resId, resCount)
+function HamsterGather:handleResourceGathered(spellCat, resId, resCount)
   if not spellCat then return end
   local mapId = C_Map.GetBestMapForUnit("player")
   local position = C_Map.GetPlayerMapPosition(mapId, "player")
   -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXYZ()
-  -- 返回的 x,y 是归一化坐标，需要乘 100
   if not position then return end
   local x, y = position:GetXY()
   -- /dump GetServerTime()
   -- /dump UnitFullName("player")
   local now = GetServerTime()
   self:Print(now, mapId, spellCat.cat, resId, resCount, x, y)
-  local data = self.db.profile.resources[spellCat.cat].data
+  -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
+  self:updateResDBPosition(spellCat, resId, mapId, math.floor(x * 10000) / 100, math.floor(y * 10000) / 100, now)
+end
+
+function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
+  local resCat = self.db.profile.resources[spellCat.cat]
+  local data = resCat.data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
   data[mapId][resId] = data[mapId][resId] or {}
-  table.insert(data[mapId][resId], {x, y, now, self.playerName})
+
+  local updated = false
+  for _, event in ipairs(data[mapId][resId]) do
+    local distancePower2 = (x - event[1]) * (x - event[1]) + (y - event[2]) * (y - event[2])
+    if distancePower2 < resCat.sameDistancePower2 then
+      event[3] = now
+      event[4] = self.playerName
+      updated = true
+      self:Print(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
+      break
+    end
+  end
+  if not updated then
+    table.insert(data[mapId][resId], {x, y, now, self.playerName})
+  end
 end
