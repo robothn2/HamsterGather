@@ -44,6 +44,34 @@ function HamsterGather:OnInitialize()
         herb = {
           show = true,
           sameDistancePower2 = 2, -- 认定为同一刷新点的距离
+          ids = {
+            [765] = true,  -- 银叶草
+            [785] = true,  -- 魔皇草
+            [2447] = true, -- 宁神花
+            [2449] = true, -- 地根草
+            [2450] = true, -- 石楠草
+            [2453] = true, -- 跌打草
+            [3355] = true, -- 野钢花
+            [3356] = true, -- 皇血草
+            [3357] = true, -- 活根草
+            [3358] = true, -- 卡德加的胡须
+            [3369] = true, -- 墓地苔
+            [3818] = true, -- 枯叶草
+            [3820] = true, -- 荆棘藻
+            [3821] = true, -- 金棘草
+            [4625] = true, -- 火焰花
+            [8831] = true, -- 紫莲花
+            [8836] = true, -- 阿尔萨斯之泪
+            [8838] = true, -- 太阳草
+            [8839] = true, -- 盲目草
+            [8845] = true, -- 幽灵菇
+            [8846] = true, -- 格罗姆之血
+            [13463] = true, -- 梦叶草
+            [13464] = true, -- 黄金参
+            [13465] = true, -- 山鼠草
+            [13466] = true, -- 瘟疫花
+            [13468] = true, -- 黑莲花
+          },
           data = {
             -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}},
           },
@@ -51,6 +79,17 @@ function HamsterGather:OnInitialize()
         mine = {
           show = true,
           sameDistancePower2 = 3,
+          ids = {
+            [2770] = true,  -- 铜矿石
+            [2771] = true,  -- 锡矿石
+            [2772] = true,  -- 铁矿石
+            [2775] = true,  -- 银矿石
+            [2776] = true,  -- 金矿石
+            [3858] = true,  -- 秘银矿石
+            [7911] = true,  -- 真银矿石
+            [10620] = true,  -- 瑟银矿石
+            [11370] = true,  -- 黑铁矿石
+          },
           data = {
             -- [map_id] = { [mineral_id] = {{x,y, gather_time, gather_char_name}, ...}}},
           },
@@ -58,6 +97,11 @@ function HamsterGather:OnInitialize()
         fish = {
           show = true,
           sameDistancePower2 = 5,
+          ids = {
+            [6358] = true, -- 黑口鱼
+            [6359] = true, -- 火鳞鳝鱼
+            [13422] = true, -- 石鳞鳗
+          },
           data = {
             -- [map_id] = { [fish_id] = {{x,y, gather_time, gather_char_name}, ...}}},
           },
@@ -213,6 +257,8 @@ end
 
 function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
   local resCat = self.db.profile.resources[spellCat.cat]
+  -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
+  if not resCat or not resCat.ids[resId] then return end
   local data = resCat.data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
