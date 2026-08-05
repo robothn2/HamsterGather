@@ -1,0 +1,38 @@
+## Interface: 11509
+## Notes: Collects Herbals, Mines and Fishing locations and show them in the worldmap and minimap
+## Notes-zhCN: 收集草药、矿等资源位置，显示于世界地图和小地图。
+## Title: HamsterGather
+## Title-zhCN: 仓鼠资源采集
+## Author: robothn
+## X-Email: 1815156@qq.com
+## X-Category: Map
+## Group: HamsterGather
+## Version: 0.0.1-classic
+## X-License: GPL-3.0
+## OptionalDeps: Ace3
+## LoadManagers: AddonLoader
+## X-LoadOn-Always: delayed
+## IconTexture: Interface\AddOns\HamsterGather\Assets\logo.tga
+## SavedVariables: HamsterGatherDB
+
+#@no-lib-strip@
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\AceAddon-3.0\AceAddon-3.0.xml
+Libs\AceEvent-3.0\AceEvent-3.0.xml
+Libs\AceDB-3.0\AceDB-3.0.xml
+Libs\AceLocale-3.0\AceLocale-3.0.xml
+Libs\AceGUI-3.0\AceGUI-3.0.xml
+Libs\AceConsole-3.0\AceConsole-3.0.xml
+Libs\AceConfig-3.0\AceConfig-3.0.xml
+Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml
+#@end-no-lib-strip@
+
+#Locales\HamsterGather-enUS.lua
+#Locales\HamsterGather-zhCN.lua
+
+## load in order
+HamsterGather.lua
+
+
+HamsterGather.xml
