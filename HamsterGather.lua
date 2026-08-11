@@ -6,33 +6,34 @@ local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEven
 
 -- all register events list below  
 local registerEvents = {
-  "CURSOR_CHANGED",
-  "UNIT_SPELLCAST_START",
-  "UNIT_SPELLCAST_CHANNEL_START",
+  --"CURSOR_CHANGED",
+  --"UNIT_SPELLCAST_START",
+  --"UNIT_SPELLCAST_CHANNEL_START",
   "UNIT_SPELLCAST_CHANNEL_STOP",
-  "UNIT_SPELLCAST_FAILED",
-  "UNIT_SPELLCAST_INTERRUPTED",
+  --"UNIT_SPELLCAST_FAILED",
+  --"UNIT_SPELLCAST_INTERRUPTED",
   "UNIT_SPELLCAST_SUCCEEDED",
-  "PLAYER_SOFT_INTERACT_CHANGED",
-  "UI_ERROR_MESSAGE",
-  "LOOT_OPENED",
-  "LOOT_READY",
-  "LOOT_CLOSED",
+  --"PLAYER_SOFT_INTERACT_CHANGED",
+  --"UI_ERROR_MESSAGE",
+  --"LOOT_OPENED",
+  --"LOOT_READY",
+  --"LOOT_CLOSED",
   "CHAT_MSG_LOOT",
-  "CHAT_MSG_MONSTER_EMOTE",
-  "PLAYER_REGEN_DISABLED",
-  "PLAYER_REGEN_ENABLED",
-  "UNIT_INVENTORY_CHANGED",
-  "UNIT_AURA",
-  "GET_ITEM_INFO_RECEIVED",
-  "PLAYER_MOUNT_DISPLAY_CHANGED",
-  "MOUNT_JOURNAL_USABILITY_CHANGED",
+  --"CHAT_MSG_MONSTER_EMOTE",
+  --"PLAYER_REGEN_DISABLED",
+  --"PLAYER_REGEN_ENABLED",
+  --"UNIT_INVENTORY_CHANGED",
+  --"UNIT_AURA",
+  --"GET_ITEM_INFO_RECEIVED",
+  --"PLAYER_MOUNT_DISPLAY_CHANGED",
+  --"MOUNT_JOURNAL_USABILITY_CHANGED",
+  "ZONE_CHANGED_NEW_AREA",
 }
 
 local spellCategories = {
-  [2366] =  { cat="herb", lootTimeout=5 },
-  [10248] = { cat="mine", lootTimeout=5 },
-  [18248] = { cat="fish", lootTimeout=5 },
+  [2366] =  { cat="herb", lootTimeout=2 },
+  [10248] = { cat="mine", lootTimeout=2 },
+  [18248] = { cat="fish", lootTimeout=2 },
 }
 
 function HamsterGather:OnInitialize()
@@ -73,7 +74,7 @@ function HamsterGather:OnInitialize()
             [13468] = true, -- 黑莲花
           },
           data = {
-            -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}},
+            -- [map_id] = { [herbal_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
         },
         mine = {
@@ -91,7 +92,7 @@ function HamsterGather:OnInitialize()
             [11370] = true,  -- 黑铁矿石
           },
           data = {
-            -- [map_id] = { [mineral_id] = {{x,y, gather_time, gather_char_name}, ...}}},
+            -- [map_id] = { [mineral_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
         },
         fish = {
@@ -103,13 +104,15 @@ function HamsterGather:OnInitialize()
             [13422] = true, -- 石鳞鳗
           },
           data = {
-            -- [map_id] = { [fish_id] = {{x,y, gather_time, gather_char_name}, ...}}},
+            -- [map_id] = { [fish_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
         },
       },
     },
   }
   self.db = LibStub("AceDB-3.0"):New("HamsterGatherDB", default_config, true)
+  self.pinPool = {}
+  self.pinCounter = 0
 end
 
 function HamsterGather:OnEnable()
@@ -120,6 +123,9 @@ function HamsterGather:OnEnable()
   for _, event in ipairs(registerEvents) do
     self:RegisterEvent(event, "OnEvent")
   end
+
+  HGWorldMapDataProvider.db = self.db
+  WorldMapFrame:AddDataProvider(HGWorldMapDataProvider)
 end
 
 function HamsterGather:OnDisable()
@@ -244,7 +250,8 @@ function HamsterGather:handleResourceGathered(spellCat, resId, resCount)
   if not spellCat then return end
   local mapId = C_Map.GetBestMapForUnit("player")
   local position = C_Map.GetPlayerMapPosition(mapId, "player")
-  -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXYZ()
+  -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
+  -- todo: 钓鱼时，玩家站立点(0.34473, 0.33951) 鱼群(0.34358, 0.34194)
   if not position then return end
   local x, y = position:GetXY()
   -- /dump GetServerTime()
@@ -262,10 +269,10 @@ function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
   local data = resCat.data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
-  data[mapId][resId] = data[mapId][resId] or {}
+  data[mapId][resId] = data[mapId][resId] or {show=true, records={}}
 
   local updated = false
-  for _, event in ipairs(data[mapId][resId]) do
+  for _, event in ipairs(data[mapId][resId].records) do
     local distancePower2 = (x - event[1]) * (x - event[1]) + (y - event[2]) * (y - event[2])
     if distancePower2 < resCat.sameDistancePower2 then
       event[3] = now
@@ -276,6 +283,60 @@ function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
     end
   end
   if not updated then
-    table.insert(data[mapId][resId], {x, y, now, self.playerName})
+    table.insert(data[mapId][resId].records, {x, y, now, self.playerName})
   end
+end
+
+-- world map
+HGWorldMapDataProvider = CreateFromMixins(MapCanvasDataProviderMixin)
+local worldmapPins = {}
+function HGWorldMapDataProvider:RemoveAllData()
+	self:GetMap():RemoveAllPinsByTemplate("HamsterGatherMapPinTemplate")
+	wipe(worldmapPins)
+end
+
+function HGWorldMapDataProvider:RefreshAllData(...)
+	self:RemoveAllData()
+
+	local mapId = WorldMapFrame.mapID
+	if not mapId then return end
+
+  local map = self:GetMap()
+	for resCat, resData in pairs(self.db.profile.resources) do
+    -- todo: check if player has resource category skill
+
+    -- [map_id] = { [herbal_id] = {show=true, records={x,y, gather_time, gather_char_name}, ...}}}}
+    local resInMap = resData.data[mapId]
+    if resInMap then
+      for resId, resShowData in pairs(resInMap) do
+        if resShowData.show then
+          for _, record in ipairs(resShowData.records) do
+            local pin = map:AcquirePin("HamsterGatherMapPinTemplate", record[1]/100.0, record[2]/100.0, resId)
+	    			table.insert(worldmapPins, pin)
+	        end
+        end
+      end
+    end
+  end
+end
+
+-- modified from HandyNotes
+HamsterGatherWorldMapPinMixin = CreateFromMixins(MapCanvasPinMixin)
+function HamsterGatherWorldMapPinMixin:OnLoad()
+	self:UseFrameLevelType("PIN_FRAME_LEVEL_AREA_POI")
+	--self:SetScalingLimits(1, 1.0, 1.2);
+end
+
+function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
+	self.title = string.format("HGWorldMapPin%d", #worldmapPins)
+	self.resId = resId
+	self:SetPosition(x, y)
+	self:SetHeight(12)
+	self:SetWidth(12)
+	self:SetAlpha(1.0)
+  local iconPath = string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId)
+	self.texture:SetTexture(iconPath)
+	self.texture:SetTexCoord(0, 1, 0, 1)
+	self.texture:SetVertexColor(1, 1, 1, 1)
+	self:EnableMouse(false)
 end

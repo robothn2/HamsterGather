@@ -7,7 +7,7 @@
 ## X-Email: 1815156@qq.com
 ## X-Category: Map
 ## Group: HamsterGather
-## Version: 0.0.1-classic
+## Version: 0.0.2-classic
 ## X-License: GPL-3.0
 ## OptionalDeps: Ace3
 ## LoadManagers: AddonLoader
@@ -15,7 +15,6 @@
 ## IconTexture: Interface\AddOns\HamsterGather\Assets\logo.tga
 ## SavedVariables: HamsterGatherDB
 
-#@no-lib-strip@
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
 Libs\AceAddon-3.0\AceAddon-3.0.xml
@@ -26,7 +25,6 @@ Libs\AceGUI-3.0\AceGUI-3.0.xml
 Libs\AceConsole-3.0\AceConsole-3.0.xml
 Libs\AceConfig-3.0\AceConfig-3.0.xml
 Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml
-#@end-no-lib-strip@
 
 #Locales\HamsterGather-enUS.lua
 #Locales\HamsterGather-zhCN.lua
