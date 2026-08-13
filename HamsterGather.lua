@@ -106,16 +106,13 @@ function HamsterGather:OnInitialize()
   local default_db = {
     profile = {
       debug = false,
-      resources = {},
+      resources = {}, -- 方便UI显示的采集数据，格式：[map_id] = { [res_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}}
+      maxRecordCount = 100, -- 保留的采集历史记录最大条数，超过时会移除前面的一半记录
+      records = {},   -- 采集历史记录，格式：{map_id, x, y, res_id, res_count, gather_time, gather_char_name}
     },
   }
   for _, res in ipairs(resourceCategories) do
-    default_db.profile.resources[res.abbr] = {
-      show = true,
-      data = {
-        -- [map_id] = { [res_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
-      }
-    }
+    default_db.profile.resources[res.abbr] = { show = true, data = {} }
   end
   self.db = LibStub("AceDB-3.0"):New("HamsterGatherDB", default_db, true)
   self.HBD = LibStub("HereBeDragons-2.0")
@@ -319,12 +316,26 @@ function HamsterGather:handleResourceGathered(resCat, resId, resCount)
   local now = GetServerTime()
   self:Debug(now, mapId, resCat.abbr, resId, resCount, x, y)
   -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
-  self:updateResDBPosition(resCat, resId, mapId, math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100, now)
+  self:updateResDBPosition(resCat, resId, resCount, mapId, math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100, now)
 end
 
-function HamsterGather:updateResDBPosition(resCat, resId, mapId, x, y, now)
+function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y, now)
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[resId] then return end
+
+  -- 增加采集历史记录
+  local records = self.db.profile.records
+  table.insert(records, {now, mapId, x, y, resId, resCount, self.playerName})
+  -- 检查采集历史记录最大条数，超过时会移除前面的一半记录
+  if #records > self.db.profile.maxRecordCount then
+    local count = #records
+    local half = math.floor(count / 2)
+    table.move(records, half + 1, count, 1)
+    for i = count - half + 1, count do
+      records[i] = nil
+    end
+  end
+
   local data = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
@@ -477,3 +488,4 @@ function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
 	self.texture:SetVertexColor(1, 1, 1, 1)
 	self:EnableMouse(false)
 end
+
