@@ -3,6 +3,7 @@
 	It will only track Mine, Herbal resources.
 ]]
 local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEvent-3.0")
+local L = LibStub("AceLocale-3.0"):GetLocale("HamsterGather", false)
 
 -- all register events list below  
 local registerEvents = {
@@ -19,28 +20,32 @@ local registerEvents = {
   --"LOOT_READY",
   --"LOOT_CLOSED",
   "CHAT_MSG_LOOT",
-  --"CHAT_MSG_MONSTER_EMOTE",
-  --"PLAYER_REGEN_DISABLED",
-  --"PLAYER_REGEN_ENABLED",
   --"UNIT_INVENTORY_CHANGED",
-  --"UNIT_AURA",
-  --"GET_ITEM_INFO_RECEIVED",
-  --"PLAYER_MOUNT_DISPLAY_CHANGED",
-  --"MOUNT_JOURNAL_USABILITY_CHANGED",
   "ZONE_CHANGED_NEW_AREA",
+  "SKILL_LINES_CHANGED",
 }
 
-local spellCategories = {
-  [2366] =  { cat="herb", lootTimeout=2 },
-  [10248] = { cat="mine", lootTimeout=2 },
-  [18248] = { cat="fish", lootTimeout=2 },
+local resourceCategories = {
+  { cat="herb", spells={2366}, lootTimeout=2, profession=L["Herbalism"] },
+  { cat="mine", spells={10248}, lootTimeout=2, profession=L["Mining"] },
+  { cat="fish", spells={18248}, lootTimeout=2, profession=L["Fishing"] },
 }
 
 function HamsterGather:OnInitialize()
   -- do init tasks here, like loading the Saved Variables, 
   -- or setting up slash commands.
+  self.resCatsBySpellId, self.resCatsByProfAbbr = {}, {}
+  for _, res in ipairs(resourceCategories) do
+    self.resCatsByProfAbbr[res.cat] = res
+
+    for _, spell in ipairs(res.spells) do
+      self.resCatsBySpellId[spell] = res
+    end
+  end
+
   local default_config = {
     profile = {
+      debug = false,
       resources = {
         herb = {
           show = true,
@@ -111,21 +116,31 @@ function HamsterGather:OnInitialize()
     },
   }
   self.db = LibStub("AceDB-3.0"):New("HamsterGatherDB", default_config, true)
+  self.HBD = LibStub("HereBeDragons-2.0")
+  self.HBDPins = LibStub("HereBeDragons-Pins-2.0")
+
   self.pinPool = {}
-  self.pinCounter = 0
+  self.minimapPins = {}
 end
 
 function HamsterGather:OnEnable()
   -- Do more initialization here, that really enables the use of your addon.
   -- Register Events, Hook functions, Create Frames, Get information from the game that wasn't available in OnInitialize
   self.playerName, self.playerRealm = UnitFullName("player")
-  self.current = { spellId=nil, spellCat=nil }
+  self.current = { spellId=nil, resCat=nil }
   for _, event in ipairs(registerEvents) do
     self:RegisterEvent(event, "OnEvent")
   end
 
+  -- share data to HGWorldMapDataProvider
   HGWorldMapDataProvider.db = self.db
+  HGWorldMapDataProvider.resCatsByProfAbbr = self.resCatsByProfAbbr
   WorldMapFrame:AddDataProvider(HGWorldMapDataProvider)
+
+  self:SKILL_LINES_CHANGED()
+
+  self:RegisterMessage("HamsterGather_NotifyUpdate", "updateMaps")
+	self.HBD.RegisterCallback(self, "PlayerZoneChanged", "updateMinimap")
 end
 
 function HamsterGather:OnDisable()
@@ -135,6 +150,12 @@ function HamsterGather:OnDisable()
   for _, event in ipairs(registerEvents) do
     self:UnregisterEvent(event)
   end
+
+  self.HBDPins:RemoveAllMinimapIcons("HamsterGatherMiniPin")
+  self:clearPins()
+  WorldMapFrame:RemoveDataProvider(HGWorldMapDataProvider)
+	self.HBD.UnregisterCallback(self, "PlayerZoneChanged")
+  self:UnregisterMessage("HamsterGather_NotifyUpdate")
 end
 
 -- info / print / debug
@@ -147,9 +168,36 @@ function HamsterGather:Print(...)
 end
 
 function HamsterGather:Debug(...)
-  if self.db and self.db.debugMode then
+  if self.db.profile.debug then
     print("|cFFFFAA00[HamsterGather]|r ", ...)
   end
+end
+
+-- get player info
+function HamsterGather:SKILL_LINES_CHANGED()
+  -- cleanup
+  for _, cat in pairs(self.resCatsByProfAbbr) do
+    cat.rank = nil
+  end
+
+	for i = 1, GetNumSkillLines() do
+    --[[
+    self:Debug(GetSkillLineInfo(i))
+    ...
+    专业 1 1 0 0 0 0 nil nil nil 0 0
+    草药学 nil nil 300 0 0 300 1 nil nil 0 0 高级的草药学技能使你可以采集高级的草药。如果你不能采集某种草药，请先在较低等级的地区采集低等级草药，以此提高你的草药学技能。
+    附魔 nil nil 60 0 0 150 1 nil nil 0 0 高级的附魔技能使你可以学习高级的附魔公式。你可以在训练师那里学习新的公式，也可以通过完成任务或杀死怪物获得新的公式。
+    ...
+    ]]
+    local skillName, _, _, skillRank = GetSkillLineInfo(i)
+    for _, cat in pairs(self.resCatsByProfAbbr) do
+      if cat.profession == skillName then
+        self:Debug(skillName, " rank ", skillRank)
+        cat.rank = skillRank
+        break
+      end
+    end
+	end
 end
 
 --[[ event flow & handlers
@@ -206,18 +254,18 @@ end
 ]]
 
 function HamsterGather:OnEvent(event, ...)
-	--self:Print(event, ...)
+	--self:Debug(event, ...)
   if event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
     -- reset loot timer after message for fishing
     local caster, _, spellId = ...
     if caster ~= 'player' then return end
-    local spellCat = spellCategories[spellId]
-    if not spellCat then return end
-    self.current.spellCat = spellCat
+    local resCat = self.resCatsBySpellId[spellId]
+    if not resCat then return end
+    self.current.resCat = resCat
     self.current.spellId = spellId
-    self:resetLootTimer(spellCat)
+    self:resetLootTimer(resCat)
   elseif event == "CHAT_MSG_LOOT" then
-    if not self.current.spellCat then return end -- 忽略没有采集施法的战利品拾取
+    if not self.current.resCat then return end -- 忽略没有采集施法的战利品拾取
     local message, _, _, _, looter = ...
     if looter ~= self.playerName then return end -- 忽略其他人的战利品拾取
     -- /dump string.match("你获得了物品：|cffffffff|Hitem:6359::::::::60::::::::::|h[火鳞鳝鱼]|h|r。", "%[(.+)%]")
@@ -231,23 +279,25 @@ function HamsterGather:OnEvent(event, ...)
     else
       count = 1
     end
-    self:handleResourceGathered(self.current.spellCat, tonumber(itemId), count)
+    self:handleResourceGathered(self.current.resCat, tonumber(itemId), count)
+  elseif event == "ZONE_CHANGED_NEW_AREA" then
+    self:updateMinimap()
   end
 end
 
-function HamsterGather:resetLootTimer(spellCat)
+function HamsterGather:resetLootTimer(resCat)
   if self.lootTimer then
     self.lootTimer:Cancel()
   end
-  self.lootTimer = C_Timer.NewTimer(spellCat.lootTimeout, function()
-    if self.current.spellCat then
-      self.current.spellCat = nil
+  self.lootTimer = C_Timer.NewTimer(resCat.lootTimeout, function()
+    if self.current.resCat then
+      self.current.resCat = nil
     end
   end)
 end
 
-function HamsterGather:handleResourceGathered(spellCat, resId, resCount)
-  if not spellCat then return end
+function HamsterGather:handleResourceGathered(resCat, resId, resCount)
+  if not resCat then return end
   local mapId = C_Map.GetBestMapForUnit("player")
   local position = C_Map.GetPlayerMapPosition(mapId, "player")
   -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
@@ -257,13 +307,13 @@ function HamsterGather:handleResourceGathered(spellCat, resId, resCount)
   -- /dump GetServerTime()
   -- /dump UnitFullName("player")
   local now = GetServerTime()
-  self:Print(now, mapId, spellCat.cat, resId, resCount, x, y)
+  self:Debug(now, mapId, resCat.cat, resId, resCount, x, y)
   -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
-  self:updateResDBPosition(spellCat, resId, mapId, math.floor(x * 10000) / 100, math.floor(y * 10000) / 100, now)
+  self:updateResDBPosition(resCat, resId, mapId, math.floor(x * 10000) / 100, math.floor(y * 10000) / 100, now)
 end
 
-function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
-  local resCat = self.db.profile.resources[spellCat.cat]
+function HamsterGather:updateResDBPosition(resCat, resId, mapId, x, y, now)
+  local resCat = self.db.profile.resources[resCat.cat]
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[resId] then return end
   local data = resCat.data
@@ -278,15 +328,97 @@ function HamsterGather:updateResDBPosition(spellCat, resId, mapId, x, y, now)
       event[3] = now
       event[4] = self.playerName
       updated = true
-      self:Print(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
+      self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
       break
     end
   end
   if not updated then
     table.insert(data[mapId][resId].records, {x, y, now, self.playerName})
+    self:updateMinimap()
+    --self:SendMessage("HamsterGather_NotifyUpdate", "HamsterGather")
   end
 end
 
+function HamsterGather:updateMaps()
+  self:updateMinimap()
+end
+
+---------------------------------------------------------
+-- mini map
+function HamsterGather:updateMinimap()
+	self.HBDPins:RemoveAllMinimapIcons("HamsterGatherMiniPin")
+  self:clearPins()
+
+	local mapId = self.HBD:GetPlayerZone()
+	if not mapId then return end
+
+	local frameLevel = Minimap:GetFrameLevel() + 5
+	local frameStrata = Minimap:GetFrameStrata()
+
+  for resCat, resData in pairs(self.db.profile.resources) do
+    -- check if player has resource category skill/profession
+    if self.resCatsByProfAbbr[resCat].rank then
+      local resInMap = resData.data[mapId]
+      -- [map_id] = { [herbal_id] = {show=true, records={x,y, gather_time, gather_char_name}, ...}}}}
+      if resInMap then
+        for resId, resShowData in pairs(resInMap) do
+          if resShowData.show then
+            for _, record in ipairs(resShowData.records) do
+              local pin = self:getNewPin()
+              if pin then -- maybe nil
+                pin:SetFrameStrata(frameStrata)
+                pin:SetFrameLevel(frameLevel)
+                pin:SetAlpha(0.6)
+                pin:SetWidth(12)
+                pin:SetHeight(12)
+                local t = pin.texture
+                t:SetTexture(string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId))
+                t:SetTexCoord(0, 1, 0, 1)
+                t:SetAllPoints(pin)
+                --pin:SetScript("OnClick", nil)
+                self.HBDPins:AddMinimapIconMap("HamsterGatherMiniPin", pin, mapId, record[1]/100.0, record[2]/100.0, false, false)
+                self.minimapPins[pin] = pin
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+function HamsterGather:clearPins()
+	for key, pin in pairs(self.minimapPins) do
+		pin:Hide()
+    table.insert(self.pinPool, pin)
+	end
+  self.minimapPins = {}
+end
+
+function HamsterGather:getNewPin()
+  local pin = nil
+  if next(self.pinPool) then
+    pin = table.remove(self.pinPool)
+  else
+    pin = CreateFrame("Button", nil, Minimap) -- 这里不要给名字，否则会被图标回收站自动收纳
+    pin:SetFrameLevel(5)
+    local texture = pin:CreateTexture(nil, "OVERLAY")
+	  pin.texture = texture
+	  texture:SetTexelSnappingBias(0)
+	  texture:SetSnapToPixelGrid(false)
+    texture:SetAllPoints(pin)
+    pin:EnableMouse(false)
+    --[[
+    pin:RegisterForClicks("LeftButtonUp", "RightButtonUp");
+    pin:SetScript("OnEnter", showPin)
+    pin:SetScript("OnLeave", hidePin)
+    pin:SetScript("OnClick", pinClick)
+    ]]
+  end
+  return pin
+end
+
+---------------------------------------------------------
 -- world map
 HGWorldMapDataProvider = CreateFromMixins(MapCanvasDataProviderMixin)
 local worldmapPins = {}
@@ -303,17 +435,18 @@ function HGWorldMapDataProvider:RefreshAllData(...)
 
   local map = self:GetMap()
 	for resCat, resData in pairs(self.db.profile.resources) do
-    -- todo: check if player has resource category skill
-
-    -- [map_id] = { [herbal_id] = {show=true, records={x,y, gather_time, gather_char_name}, ...}}}}
-    local resInMap = resData.data[mapId]
-    if resInMap then
-      for resId, resShowData in pairs(resInMap) do
-        if resShowData.show then
-          for _, record in ipairs(resShowData.records) do
-            local pin = map:AcquirePin("HamsterGatherMapPinTemplate", record[1]/100.0, record[2]/100.0, resId)
-	    			table.insert(worldmapPins, pin)
-	        end
+    -- check if player has resource category skill/profession
+    if self.resCatsByProfAbbr[resCat].rank then
+      local resInMap = resData.data[mapId]
+      -- [map_id] = { [herbal_id] = {show=true, records={x,y, gather_time, gather_char_name}, ...}}}}
+      if resInMap then
+        for resId, resShowData in pairs(resInMap) do
+          if resShowData.show then
+            for _, record in ipairs(resShowData.records) do
+              local pin = map:AcquirePin("HamsterGatherMapPinTemplate", record[1]/100.0, record[2]/100.0, resId)
+              table.insert(worldmapPins, pin)
+            end
+          end
         end
       end
     end
@@ -324,7 +457,7 @@ end
 HamsterGatherWorldMapPinMixin = CreateFromMixins(MapCanvasPinMixin)
 function HamsterGatherWorldMapPinMixin:OnLoad()
 	self:UseFrameLevelType("PIN_FRAME_LEVEL_AREA_POI")
-	--self:SetScalingLimits(1, 1.0, 1.2);
+	self:SetScalingLimits(1, 1.0, 1.2)
 end
 
 function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
