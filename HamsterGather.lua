@@ -103,32 +103,21 @@ function HamsterGather:OnInitialize()
   self.printPrefix = string.format("|cFF00FF00[%s]|r ", L["HamsterGather"])
   self.debugPrefix = string.format("|cFFFFAA00[%s]|r ", L["HamsterGather"])
 
-  local default_config = {
+  local default_db = {
     profile = {
       debug = false,
-      resources = {
-        herb = {
-          show = true,
-          data = {
-            -- [map_id] = { [herbal_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
-          },
-        },
-        mine = {
-          show = true,
-          data = {
-            -- [map_id] = { [mineral_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
-          },
-        },
-        fish = {
-          show = true,
-          data = {
-            -- [map_id] = { [fish_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
-          },
-        },
-      },
+      resources = {},
     },
   }
-  self.db = LibStub("AceDB-3.0"):New("HamsterGatherDB", default_config, true)
+  for _, res in ipairs(resourceCategories) do
+    default_db.profile.resources[res.abbr] = {
+      show = true,
+      data = {
+        -- [map_id] = { [res_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
+      }
+    }
+  end
+  self.db = LibStub("AceDB-3.0"):New("HamsterGatherDB", default_db, true)
   self.HBD = LibStub("HereBeDragons-2.0")
   self.HBDPins = LibStub("HereBeDragons-Pins-2.0")
 
