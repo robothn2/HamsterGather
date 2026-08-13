@@ -26,9 +26,66 @@ local registerEvents = {
 }
 
 local resourceCategories = {
-  { cat="herb", spells={2366}, lootTimeout=2, profession=L["Herbalism"] },
-  { cat="mine", spells={10248}, lootTimeout=2, profession=L["Mining"] },
-  { cat="fish", spells={18248}, lootTimeout=2, profession=L["Fishing"] },
+  {
+    abbr="herb",
+    profession=L["Herbalism"], -- 用来分析采集资源需要的技能是否具备
+    spells={2366},          -- 草药学的采集技能ID列表
+    lootTimeout=2,        -- 采集资源的施法完成后，超时时间之外获取的战利品都会被忽略
+    posShiftFacing=1,     -- 采集成功后玩家位置和资源点的距离，按玩家面对方向往前计算码数
+    sameDistancePower2=1, -- 认定为同一刷新点的距离
+    ids = {
+      [765] = true,  -- 银叶草
+      [785] = true,  -- 魔皇草
+      [2447] = true, -- 宁神花
+      [2449] = true, -- 地根草
+      [2450] = true, -- 石楠草
+      [2453] = true, -- 跌打草
+      [3355] = true, -- 野钢花
+      [3356] = true, -- 皇血草
+      [3357] = true, -- 活根草
+      [3358] = true, -- 卡德加的胡须
+      [3369] = true, -- 墓地苔
+      [3818] = true, -- 枯叶草
+      [3820] = true, -- 荆棘藻
+      [3821] = true, -- 金棘草
+      [4625] = true, -- 火焰花
+      [8831] = true, -- 紫莲花
+      [8836] = true, -- 阿尔萨斯之泪
+      [8838] = true, -- 太阳草
+      [8839] = true, -- 盲目草
+      [8845] = true, -- 幽灵菇
+      [8846] = true, -- 格罗姆之血
+      [13463] = true, -- 梦叶草
+      [13464] = true, -- 黄金参
+      [13465] = true, -- 山鼠草
+      [13466] = true, -- 瘟疫花
+      [13468] = true, -- 黑莲花
+    },
+  },
+  {
+    abbr="mine", profession=L["Mining"], spells={10248},
+    lootTimeout=2, posShiftFacing=1, sameDistancePower2=1,
+    ids = {
+      [2770] = true,  -- 铜矿石
+      [2771] = true,  -- 锡矿石
+      [2772] = true,  -- 铁矿石
+      [2775] = true,  -- 银矿石
+      [2776] = true,  -- 金矿石
+      [3858] = true,  -- 秘银矿石
+      [7911] = true,  -- 真银矿石
+      [10620] = true,  -- 瑟银矿石
+      [11370] = true,  -- 黑铁矿石
+    },
+  },
+  {
+    abbr="fish", profession=L["Fishing"], spells={18248},
+    lootTimeout=2, posShiftFacing=15, sameDistancePower2=1,
+    ids = {
+      [6358] = true, -- 黑口鱼
+      [6359] = true, -- 火鳞鳝鱼
+      [13422] = true, -- 石鳞鳗
+    },
+  },
 }
 
 function HamsterGather:OnInitialize()
@@ -36,12 +93,15 @@ function HamsterGather:OnInitialize()
   -- or setting up slash commands.
   self.resCatsBySpellId, self.resCatsByProfAbbr = {}, {}
   for _, res in ipairs(resourceCategories) do
-    self.resCatsByProfAbbr[res.cat] = res
+    self.resCatsByProfAbbr[res.abbr] = res
 
     for _, spell in ipairs(res.spells) do
       self.resCatsBySpellId[spell] = res
     end
   end
+
+  self.printPrefix = string.format("|cFF00FF00[%s]|r ", L["HamsterGather"])
+  self.debugPrefix = string.format("|cFFFFAA00[%s]|r ", L["HamsterGather"])
 
   local default_config = {
     profile = {
@@ -49,65 +109,18 @@ function HamsterGather:OnInitialize()
       resources = {
         herb = {
           show = true,
-          sameDistancePower2 = 2, -- 认定为同一刷新点的距离
-          ids = {
-            [765] = true,  -- 银叶草
-            [785] = true,  -- 魔皇草
-            [2447] = true, -- 宁神花
-            [2449] = true, -- 地根草
-            [2450] = true, -- 石楠草
-            [2453] = true, -- 跌打草
-            [3355] = true, -- 野钢花
-            [3356] = true, -- 皇血草
-            [3357] = true, -- 活根草
-            [3358] = true, -- 卡德加的胡须
-            [3369] = true, -- 墓地苔
-            [3818] = true, -- 枯叶草
-            [3820] = true, -- 荆棘藻
-            [3821] = true, -- 金棘草
-            [4625] = true, -- 火焰花
-            [8831] = true, -- 紫莲花
-            [8836] = true, -- 阿尔萨斯之泪
-            [8838] = true, -- 太阳草
-            [8839] = true, -- 盲目草
-            [8845] = true, -- 幽灵菇
-            [8846] = true, -- 格罗姆之血
-            [13463] = true, -- 梦叶草
-            [13464] = true, -- 黄金参
-            [13465] = true, -- 山鼠草
-            [13466] = true, -- 瘟疫花
-            [13468] = true, -- 黑莲花
-          },
           data = {
             -- [map_id] = { [herbal_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
         },
         mine = {
           show = true,
-          sameDistancePower2 = 3,
-          ids = {
-            [2770] = true,  -- 铜矿石
-            [2771] = true,  -- 锡矿石
-            [2772] = true,  -- 铁矿石
-            [2775] = true,  -- 银矿石
-            [2776] = true,  -- 金矿石
-            [3858] = true,  -- 秘银矿石
-            [7911] = true,  -- 真银矿石
-            [10620] = true,  -- 瑟银矿石
-            [11370] = true,  -- 黑铁矿石
-          },
           data = {
             -- [map_id] = { [mineral_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
         },
         fish = {
           show = true,
-          sameDistancePower2 = 5,
-          ids = {
-            [6358] = true, -- 黑口鱼
-            [6359] = true, -- 火鳞鳝鱼
-            [13422] = true, -- 石鳞鳗
-          },
           data = {
             -- [map_id] = { [fish_id] = {show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}},
           },
@@ -139,8 +152,8 @@ function HamsterGather:OnEnable()
 
   self:SKILL_LINES_CHANGED()
 
-  self:RegisterMessage("HamsterGather_NotifyUpdate", "updateMaps")
 	self.HBD.RegisterCallback(self, "PlayerZoneChanged", "updateMinimap")
+  self:Print(L["HamsterGather"], "loaded.")
 end
 
 function HamsterGather:OnDisable()
@@ -155,21 +168,16 @@ function HamsterGather:OnDisable()
   self:clearPins()
   WorldMapFrame:RemoveDataProvider(HGWorldMapDataProvider)
 	self.HBD.UnregisterCallback(self, "PlayerZoneChanged")
-  self:UnregisterMessage("HamsterGather_NotifyUpdate")
 end
 
--- info / print / debug
-function HamsterGather:Info(...)
-  print("|cFF00FF00[HamsterGather]|r ", ...)
-end
-
+-- output to chat: print / debug
 function HamsterGather:Print(...)
-  print("|cFF00FF00[HamsterGather]|r ", ...)
+  print(self.printPrefix, ...)
 end
 
 function HamsterGather:Debug(...)
   if self.db.profile.debug then
-    print("|cFFFFAA00[HamsterGather]|r ", ...)
+    print(self.debugPrefix, ...)
   end
 end
 
@@ -198,6 +206,24 @@ function HamsterGather:SKILL_LINES_CHANGED()
       end
     end
 	end
+end
+
+function HamsterGather:getPosFrontOfPlayerFacing(distanceYard)
+  local normX, normY, mapId = self.HBD:GetPlayerZonePosition()
+  if not normX or not mapId then return nil, nil, nil end
+  if not distanceYard or distanceYard == 0 then
+    return normX, normY, mapId
+  end
+
+  local width, height = self.HBD:GetZoneSize(mapId)
+  if not width or width <= 0 then return nil, nil, nil end
+
+  local facing = GetPlayerFacing() 
+  if facing == nil then return nil, nil, nil end
+
+  local dx = math.sin(facing + math.pi) * distanceYard
+  local dy = math.cos(facing + math.pi) * distanceYard
+  return normX + (dx / width), normY + (dy / height), mapId
 end
 
 --[[ event flow & handlers
@@ -298,25 +324,19 @@ end
 
 function HamsterGather:handleResourceGathered(resCat, resId, resCount)
   if not resCat then return end
-  local mapId = C_Map.GetBestMapForUnit("player")
-  local position = C_Map.GetPlayerMapPosition(mapId, "player")
+  local x, y, mapId = self:getPosFrontOfPlayerFacing(resCat.posShiftFacing)
   -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
-  -- todo: 钓鱼时，玩家站立点(0.34473, 0.33951) 鱼群(0.34358, 0.34194)
-  if not position then return end
-  local x, y = position:GetXY()
   -- /dump GetServerTime()
-  -- /dump UnitFullName("player")
   local now = GetServerTime()
-  self:Debug(now, mapId, resCat.cat, resId, resCount, x, y)
+  self:Debug(now, mapId, resCat.abbr, resId, resCount, x, y)
   -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
-  self:updateResDBPosition(resCat, resId, mapId, math.floor(x * 10000) / 100, math.floor(y * 10000) / 100, now)
+  self:updateResDBPosition(resCat, resId, mapId, math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100, now)
 end
 
 function HamsterGather:updateResDBPosition(resCat, resId, mapId, x, y, now)
-  local resCat = self.db.profile.resources[resCat.cat]
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[resId] then return end
-  local data = resCat.data
+  local data = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
   data[mapId][resId] = data[mapId][resId] or {show=true, records={}}
@@ -335,12 +355,7 @@ function HamsterGather:updateResDBPosition(resCat, resId, mapId, x, y, now)
   if not updated then
     table.insert(data[mapId][resId].records, {x, y, now, self.playerName})
     self:updateMinimap()
-    --self:SendMessage("HamsterGather_NotifyUpdate", "HamsterGather")
   end
-end
-
-function HamsterGather:updateMaps()
-  self:updateMinimap()
 end
 
 ---------------------------------------------------------
