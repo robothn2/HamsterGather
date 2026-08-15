@@ -330,8 +330,10 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   if #records > self.db.profile.maxRecordCount then
     local count = #records
     local half = math.floor(count / 2)
-    table.move(records, half + 1, count, 1)
-    for i = count - half + 1, count do
+    for i = 1, half do
+      records[i] = records[i + half]
+    end
+    for i = half + 1, count do
       records[i] = nil
     end
   end
