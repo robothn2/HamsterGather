@@ -334,6 +334,7 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   if not resCat or not resCat.ids[resId] then return end
 
   -- 增加采集历史记录
+  -- todo: 将 records2Analyze 合并到 records2，在加载后分析 records 所有记录，自动进行感兴趣的分组；然后移除过多的历史记录
   local records = self.db.profile.records
   table.insert(records, {now, mapId, x, y, resId, resCount, self.playerName})
   -- 检查采集历史记录最大条数，超过时会移除前面的一半记录
@@ -357,7 +358,7 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   data[mapId][resId] = data[mapId][resId] or {show=true, records={}}
   local mapResRespawns = data[mapId][resId].records
 
-  local respawn = self:FindSameRespawn(mapResRespawns, x, y, resCat)
+  local respawn = self:FindRespawn(mapResRespawns, x, y, resCat)
   if respawn then
     respawn[3] = now
     respawn[4] = self.playerName
@@ -368,13 +369,125 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   end
 end
 
-function HamsterGather:FindSameRespawn(mapResRespawns, x, y, resCat)
-  for _, respawn in ipairs(mapResRespawns) do
+function HamsterGather:FindRespawn(mapResRespawns, x, y, resCat)
+  for i, respawn in ipairs(mapResRespawns) do
     local distancePower2 = (x - respawn[1]) * (x - respawn[1]) + (y - respawn[2]) * (y - respawn[2])
     if distancePower2 < resCat.sameDistancePower2 then
+      respawn[5] = i
       return respawn
     end
   end
+end
+
+--- 核心分组计算函数
+-- @param records table 采集记录，每条格式为: { nodeId = "x_y", timestamp = 1700000000 }
+-- @return table groups 分组结果: { [1] = {node1, node2}, [2] = {...} }
+function HamsterGather:ComputeGroupsByConflicts(mapId, resId)
+  -- 配置参数
+  local ROUND_MAX_GAP = 300  -- 5分钟（300秒）：同一轮采集内的最大时间跨度（判定为互斥）
+
+  local resCat
+  -- 通过 resId 获取资源分类信息
+  for _, res in ipairs(resourceCategories) do
+    if res.ids[resId] then
+      resCat = res
+      break
+    end
+  end
+
+  local mapResRespawns = self.db.profile.resources[resCat.abbr].data[mapId][resId].records
+  local records = {}
+  for _, r in ipairs(self.db.profile.records2Analyze) do
+    -- {now, mapId, x, y, resId, self.playerName}
+    if r[2] == mapId and r[5] == resId then
+      local respawn = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+      table.insert(records, {ts = r[1], id = respawn[5]})
+    end
+  end
+  self:Debug("Totally ".. #records .. " records")
+  if #records == 0 then return end
+
+  -- 1. 按时间顺序排序采集记录
+  table.sort(records, function(a, b) return a.ts < b.ts end)
+
+  -- 2. 构建冲突图 (Adjacency Matrix / Set)
+  -- conflicts[nodeA][nodeB] = true 表示 nodeA 和 nodeB 绝对不能在同一组
+  local conflicts = {}
+  local allNodesMap = {}
+
+  local function addConflict(u, v)
+    if u == v then return end
+    conflicts[u] = conflicts[u] or {}
+    conflicts[v] = conflicts[v] or {}
+    conflicts[u][v] = true
+    conflicts[v][u] = true
+  end
+
+  -- 滑动窗口构建互斥关系：
+  -- 凡是时间差在 ROUND_MAX_GAP (5分钟) 内的两个不同草点，全部标记为互斥
+  local n = #records
+  for i = 1, n do
+    local recA = records[i]
+    allNodesMap[recA.id] = true
+    
+    for j = i + 1, n do
+      local recB = records[j]
+      local timeDiff = recB.ts - recA.ts
+      
+      if timeDiff <= ROUND_MAX_GAP then
+        addConflict(recA.id, recB.id)
+      else
+        -- 超过5分钟，说明不是同一次巡回采到的（可能是等了10min后的下一轮），跳出内层循环
+        break
+      end
+    end
+  end
+
+  -- 3. 收集所有唯一点，并按“冲突度（度数）”降序排序（Welsh-Powell 经典图着色贪心算法）
+  local nodesList = {}
+  for nodeId, _ in pairs(allNodesMap) do
+    local degree = 0
+    if conflicts[nodeId] then
+      for _ in pairs(conflicts[nodeId]) do degree = degree + 1 end
+    end
+    table.insert(nodesList, { id = nodeId, degree = degree })
+  end
+
+  -- 冲突最多的点最难分配，优先给它安排组
+  table.sort(nodesList, function(a, b) return a.degree > b.degree end)
+
+  -- 4. 贪心分配组（确保同组内无任何冲突）
+  local groups = {} -- groups[groupId] = { nodeId1, nodeId2, ... }
+  for _, item in ipairs(nodesList) do
+    local u = item.id
+    local assignedGroup = nil
+
+    -- 尝试放到现有的组中
+    for groupIndex, groupMembers in ipairs(groups) do
+      local hasConflict = false
+      for _, v in ipairs(groupMembers) do
+        if conflicts[u] and conflicts[u][v] then
+          hasConflict = true
+          break
+        end
+      end
+
+      -- 如果这个组里所有的节点和 u 都不冲突，则加入该组
+      if not hasConflict then
+        assignedGroup = groupIndex
+        table.insert(groupMembers, u)
+        break
+      end
+    end
+
+    -- 如果所有现存组都有冲突，新建一个组
+    if not assignedGroup then
+      table.insert(groups, { u })
+      assignedGroup = #groups
+    end
+  end
+
+  return groups
 end
 
 -- 支持斜线开始的命令
@@ -388,10 +501,13 @@ function HamsterGather:HandleSlash(msg)
   if cmd == "group" then
     local mapId = C_Map.GetBestMapForUnit("player")
     local resId = tonumber(rest)
-    --local groups = self:ComputeGroupsByConflicts(mapId, resId)
-    --self:Print("当前分组计算完成，共有组数：" .. #groups)
+    local groups = self:ComputeGroupsByConflicts(mapId, resId)
+    self:Print("当前分组计算完成，共有组数：" .. #groups)
+    for i, group in ipairs(groups) do
+      self:Print("Group", i, ": {", table.concat(group, ","), "}")
+    end
   else
-    self:Print(msg)
+    self:Print("Unknown command:", msg)
   end
 end
 
