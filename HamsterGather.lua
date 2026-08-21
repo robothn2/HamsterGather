@@ -2,7 +2,7 @@
 	This addon designed to be as lightweight as possible.
 	It will only track Mine, Herbal resources.
 ]]
-local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEvent-3.0")
+local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEvent-3.0", "AceConsole-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("HamsterGather", false)
 
 -- all register events list below  
@@ -61,6 +61,13 @@ local resourceCategories = {
       [13466] = true, -- 瘟疫花
       [13468] = true, -- 黑莲花
     },
+    ids2Analyze = { -- 需要分析的资源点，用于分析资源点的分组
+      [3818] = true, -- 枯叶草
+      [4625] = true, -- 火焰花
+      [13463] = true, -- 梦叶草
+      [13465] = true, -- 山鼠草
+      [13466] = true, -- 瘟疫花
+    },
   },
   {
     abbr="mine", profession=L["Mining"], spells={10248},
@@ -108,7 +115,8 @@ function HamsterGather:OnInitialize()
       debug = false,
       resources = {}, -- 方便UI显示的采集数据，格式：[map_id] = { [res_id] = { show = true, records = {{x,y, gather_time, gather_char_name}, ...}}}}
       maxRecordCount = 100, -- 保留的采集历史记录最大条数，超过时会移除前面的一半记录
-      records = {},   -- 采集历史记录，格式：{map_id, x, y, res_id, res_count, gather_time, gather_char_name}
+      records = {},         -- 滚动的采集历史记录，格式：{map_id, x, y, res_id, res_count, gather_time, gather_char_name}
+      records2Analyze = {}, -- 用于分析资源点分组的采集历史记录
     },
   }
   for _, res in ipairs(resourceCategories) do
@@ -120,6 +128,8 @@ function HamsterGather:OnInitialize()
 
   self.pinPool = {}
   self.minimapPins = {}
+
+  self:RegisterChatCommand("hg", "HandleSlash")
 end
 
 function HamsterGather:OnEnable()
@@ -337,26 +347,51 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
       records[i] = nil
     end
   end
+  if resCat.ids2Analyze and resCat.ids2Analyze[resId] then
+    table.insert(self.db.profile.records2Analyze, {now, mapId, x, y, resId, self.playerName})
+  end
 
   local data = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
   data[mapId] = data[mapId] or {}
   data[mapId][resId] = data[mapId][resId] or {show=true, records={}}
+  local mapResRespawns = data[mapId][resId].records
 
-  local updated = false
-  for _, event in ipairs(data[mapId][resId].records) do
-    local distancePower2 = (x - event[1]) * (x - event[1]) + (y - event[2]) * (y - event[2])
+  local respawn = self:FindSameRespawn(mapResRespawns, x, y, resCat)
+  if respawn then
+    respawn[3] = now
+    respawn[4] = self.playerName
+    self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
+  else
+    table.insert(mapResRespawns, {x, y, now, self.playerName})
+    self:updateMinimap()
+  end
+end
+
+function HamsterGather:FindSameRespawn(mapResRespawns, x, y, resCat)
+  for _, respawn in ipairs(mapResRespawns) do
+    local distancePower2 = (x - respawn[1]) * (x - respawn[1]) + (y - respawn[2]) * (y - respawn[2])
     if distancePower2 < resCat.sameDistancePower2 then
-      event[3] = now
-      event[4] = self.playerName
-      updated = true
-      self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
-      break
+      return respawn
     end
   end
-  if not updated then
-    table.insert(data[mapId][resId].records, {x, y, now, self.playerName})
-    self:updateMinimap()
+end
+
+-- 支持斜线开始的命令
+function HamsterGather:HandleSlash(msg)
+  local cmd, rest = msg:match("^(%S+)%s*(.*)$")
+  if not cmd then
+    return
+  end
+
+  cmd = cmd:lower()
+  if cmd == "group" then
+    local mapId = C_Map.GetBestMapForUnit("player")
+    local resId = tonumber(rest)
+    --local groups = self:ComputeGroupsByConflicts(mapId, resId)
+    --self:Print("当前分组计算完成，共有组数：" .. #groups)
+  else
+    self:Print(msg)
   end
 end
 
@@ -490,4 +525,3 @@ function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
 	self.texture:SetVertexColor(1, 1, 1, 1)
 	self:EnableMouse(false)
 end
-
