@@ -691,7 +691,7 @@ function HamsterGatherWorldMapPinMixin:OnMouseEnter()
   
   local cnt = 0
   for _, pin in ipairs(worldmapPins) do
-    if pin.groupId == self.groupId then
+    if pin.resId == self.resId and pin.groupId == self.groupId then
       pin:SetAlpha(1.0)
       cnt = cnt + 1
     end
