@@ -380,11 +380,12 @@ function HamsterGather:FindRespawn(mapResRespawns, x, y, resCat)
 end
 
 --- 核心分组计算函数
--- @param records table 采集记录，每条格式为: { nodeId = "x_y", timestamp = 1700000000 }
--- @return table groups 分组结果: { [1] = {node1, node2}, [2] = {...} }
-function HamsterGather:ComputeGroupsByConflicts(mapId, resId)
+-- @param mapId 地图ID
+-- @param resId 资源ID
+-- @return table groups 分组结果: { [1] = {respawnId1, respawnId2}, [2] = {...} }
+function HamsterGather:ComputeGroups1(mapId, resId)
   -- 配置参数
-  local ROUND_MAX_GAP = 300  -- 5分钟（300秒）：同一轮采集内的最大时间跨度（判定为互斥）
+  local ROUND_MAX_GAP = 540  -- 9分钟（300秒）：同一轮采集内的最大时间跨度（判定为互斥）
 
   local resCat
   -- 通过 resId 获取资源分类信息
@@ -457,10 +458,10 @@ function HamsterGather:ComputeGroupsByConflicts(mapId, resId)
   table.sort(nodesList, function(a, b) return a.degree > b.degree end)
 
   -- 4. 贪心分配组（确保同组内无任何冲突）
-  local groups = {} -- groups[groupId] = { nodeId1, nodeId2, ... }
+  local groups = {} -- groups[groupId] = { respawnId1, respawnId2, ... }
   for _, item in ipairs(nodesList) do
     local u = item.id
-    local assignedGroup = nil
+    local allocateGroupId = nil
 
     -- 尝试放到现有的组中
     for groupIndex, groupMembers in ipairs(groups) do
@@ -474,18 +475,197 @@ function HamsterGather:ComputeGroupsByConflicts(mapId, resId)
 
       -- 如果这个组里所有的节点和 u 都不冲突，则加入该组
       if not hasConflict then
-        assignedGroup = groupIndex
+        allocateGroupId = groupIndex
         table.insert(groupMembers, u)
         break
       end
     end
 
     -- 如果所有现存组都有冲突，新建一个组
-    if not assignedGroup then
+    if not allocateGroupId then
       table.insert(groups, { u })
-      assignedGroup = #groups
+      allocateGroupId = #groups
     end
   end
+
+  -- 更新 respawns 内的各资源点的组 ID
+  for groupId, group in ipairs(groups) do
+    for _, respawnId in ipairs(group) do
+      mapResRespawns[respawnId][5] = groupId
+    end
+  end
+
+  HGWorldMapDataProvider:RefreshAllData()
+  return groups
+end
+
+--- 核心分组计算函数
+-- @param mapId 地图ID
+-- @param resId 资源ID
+-- @return table groups 分组结果: { [1] = {respawnId1, respawnId2}, [2] = {...} }
+function HamsterGather:ComputeGroups2(mapId, resId)
+  local MAX_GROUP_SIZE = 6     -- 每组最多 6 个点
+  local MAX_NEIGHBOR_DISTANCE = 800 -- 最大允许 x,y 各 20 点差值
+  local ROUND_MAX_GAP = 300    -- 5 分钟 (300秒) 冲突判定
+
+  local resCat
+  -- 通过 resId 获取资源分类信息
+  for _, res in ipairs(resourceCategories) do
+    if res.ids[resId] then
+      resCat = res
+      break
+    end
+  end
+
+  local mapResRespawns = self.db.profile.resources[resCat.abbr].data[mapId][resId].records
+  local records = {}
+  for _, r in ipairs(self.db.profile.records2Analyze) do
+    -- {now, mapId, x, y, resId, self.playerName}
+    if r[2] == mapId and r[5] == resId then
+      local respawn = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+      table.insert(records, {ts = r[1], id = respawn[5]})
+    end
+  end
+  self:Debug("Totally ".. #records .. " records")
+  if #records == 0 then return end
+
+  -- 按时间顺序排序采集记录
+  table.sort(records, function(a, b) return a.ts < b.ts end)
+
+  -- 计算两资源点间的二维欧氏距离平方
+  local function calcRespawnDistance(r1, r2)
+    local dx = r1[1] - r2[1]
+    local dy = r1[2] - r2[2]
+    return dx * dx + dy * dy
+  end
+  local function calcDistance(x1, y1, x2, y2)
+    local dx = x1 - x2
+    local dy = y1 - y2
+    return dx * dx + dy * dy
+  end
+  local function lookupDistance(respawns, respawnId1, respawnId2)
+    if respawnId1 > respawnId2 then respawnId1, respawnId2 = respawnId2, respawnId1 end
+    return respawns[respawnId1][respawnId2].distance
+  end
+
+  -- 资源点缓存表
+  local respawns = {}
+  for respawnId, respawn in ipairs(mapResRespawns) do
+    local respawnInfo = { x = respawn[1], y = respawn[2],
+      cornerDistances = {
+        topleft = calcDistance(respawn[1], respawn[2], 0, 0),
+        bottomleft = calcDistance(respawn[1], respawn[2], 0, 100),
+        bottomright = calcDistance(respawn[1], respawn[2], 100, 100),
+        topright = calcDistance(respawn[1], respawn[2], 100, 0),
+      },
+    }
+    for anotherId = respawnId + 1, #mapResRespawns do
+      respawnInfo[anotherId] = {distance = calcRespawnDistance(respawn, mapResRespawns[anotherId]), conflict = false}
+    end
+    respawns[respawnId] = respawnInfo
+  end
+
+  -- 处理采集历史记录，根据时间间隔更新资源点分组互斥标记 respawns[respawnId A][respawnId B].conflict
+  local n = #records
+  for i = 1, n do
+    for j = i + 1, n do
+      if (records[j].ts - records[i].ts) > ROUND_MAX_GAP then
+        break
+      end
+      local u, v = records[i].id, records[j].id
+      if u ~= v then
+        if u > v then u,v = v,u end -- respawns 表是有下标顺序要求的，小的在前
+        respawns[u][v].conflict = true
+      end
+    end
+  end
+
+  -- 辅助函数：检查资源节点是否与当前组 groupMembers 中的任何节点冲突
+  local function hasConflictWithGroup(respawnId, groupMembers)
+    for _, memberId in ipairs(groupMembers) do
+      if respawnId < memberId then
+        if respawns[respawnId][memberId].conflict then return true end
+      else
+        if respawns[memberId][respawnId].conflict then return true end
+      end
+    end
+    return false
+  end
+
+  -- 未分配资源节点集合: unassigned[respawnId] = true
+  local unassigned = {}
+  local totalUnassignedCount = 0
+  for respawnId, _ in ipairs(mapResRespawns) do
+    unassigned[respawnId] = true
+    totalUnassignedCount = totalUnassignedCount + 1
+  end
+
+  
+  -- 按地图4个角的顺序选择一个角，选择最接近当前角的一个未分配组的资源点
+  -- 以灼热平原的火焰花为例，正上方只有一个资源组，且经常被卡在一个无法采集的点，一般从左上角逆时针或者右上角顺时针采集，所以选取角的顺序要跟着地图走
+  local corners = {'topleft', 'bottomleft', 'bottomright', 'bottomright'}
+  local function getCornerRespawn(unassignedRespawns, corner)
+    if #unassignedRespawns == 0 then return nil end
+    local res = {}
+    for respawnId, _ in pairs(unassignedRespawns) do
+      table.insert(res, respawnId)
+    end
+    self:Debug(corner, " has unassigned respawns:", table.concat(res, ','))
+    table.sort(res, function(a, b) return respawns[a].cornerDistances[corner] < respawns[b].cornerDistances[corner] end)
+    self:Debug("unassigned respawns sorted by corner distance:", table.concat(res, ','))
+    return res[1]
+  end
+
+  local groups = {}
+  local cornerIndex = 1
+  while totalUnassignedCount > 0 do
+    -- 按角顺序选择新组起始资源点
+    local curRespawnId = getCornerRespawn(unassigned, corners[cornerIndex])
+    if not curRespawnId then break end
+    cornerIndex = cornerIndex + 1
+    if cornerIndex > #corners then cornerIndex = 1 end
+
+    local curGroup = { curRespawnId }
+    table.insert(groups, curGroup)
+    local respawnInGroupIndex = 1
+    unassigned[curRespawnId] = nil
+    totalUnassignedCount = totalUnassignedCount - 1
+
+    -- 如果组还没满并且当前组内被选定资源点索引未超限，按距离从近到远寻找符合条件的节点
+    while #curGroup < MAX_GROUP_SIZE and respawnInGroupIndex <= #curGroup do
+      curRespawnId = curGroup[respawnInGroupIndex]
+      -- 将剩余所有未分配节点按到 curRespawnId 的距离升序排列
+      local candidates = {}
+      for respawnId, _ in pairs(unassigned) do
+        local distance = lookupDistance(respawns, curRespawnId, respawnId)
+        if distance < MAX_NEIGHBOR_DISTANCE then
+          table.insert(candidates, {id = respawnId, dist = distance})
+        end
+      end
+      table.sort(candidates, function(a, b) return a.dist < b.dist end)
+
+      -- 依次尝试放入最近且不冲突的节点
+      for _, cand in ipairs(candidates) do
+        if #curGroup >= MAX_GROUP_SIZE then break end
+
+        -- 判定互斥：不与组内现有的任何节点冲突
+        if not hasConflictWithGroup(cand.id, curGroup) then
+          table.insert(curGroup, cand.id)
+          unassigned[cand.id] = nil
+          totalUnassignedCount = totalUnassignedCount - 1
+        end
+      end
+      respawnInGroupIndex = respawnInGroupIndex + 1
+    end
+  end
+
+  -- 更新 respawns 内的各资源点的组 ID，并刷新 world map
+  for groupId, group in ipairs(groups) do
+    for _, respawnId in ipairs(group) do
+      mapResRespawns[respawnId][5] = groupId
+    end
+  end
+  HGWorldMapDataProvider:RefreshAllData()
 
   return groups
 end
@@ -501,10 +681,11 @@ function HamsterGather:HandleSlash(msg)
   if cmd == "group" then
     local mapId = C_Map.GetBestMapForUnit("player")
     local resId = tonumber(rest)
-    local groups = self:ComputeGroupsByConflicts(mapId, resId)
-    self:Print("当前分组计算完成，共有组数：" .. #groups)
-    for i, group in ipairs(groups) do
-      self:Print("Group", i, ": {", table.concat(group, ","), "}")
+    local groups = self:ComputeGroups2(mapId, resId)
+    if groups then
+      for i, group in ipairs(groups) do
+        self:Print("Group", i, ": {", table.concat(group, ","), "}")
+      end
     end
   else
     self:Print("Unknown command:", msg)
@@ -613,6 +794,11 @@ function HGWorldMapDataProvider:RefreshAllData(...)
             for _, record in ipairs(resShowData.records) do
               local pin = map:AcquirePin("HamsterGatherMapPinTemplate", record[1]/100.0, record[2]/100.0, resId)
               table.insert(worldmapPins, pin)
+             	pin:SetAlpha(0.6)
+             	pin:EnableMouse(true)
+              pin.mapId = mapId
+              pin.resId = resId
+              pin.groupId = record[5]
             end
           end
         end
@@ -634,10 +820,41 @@ function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
 	self:SetPosition(x, y)
 	self:SetHeight(12)
 	self:SetWidth(12)
-	self:SetAlpha(1.0)
+	self:SetAlpha(0.8)
   local iconPath = string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId)
 	self.texture:SetTexture(iconPath)
 	self.texture:SetTexCoord(0, 1, 0, 1)
 	self.texture:SetVertexColor(1, 1, 1, 1)
-	self:EnableMouse(false)
+end
+
+function HamsterGatherWorldMapPinMixin:OnMouseEnter()
+	if not self.groupId then return end
+  
+  local cnt = 0
+  for _, pin in ipairs(worldmapPins) do
+    if pin.groupId == self.groupId then
+      pin:SetAlpha(1.0)
+      cnt = cnt + 1
+    end
+  end
+  print("Group:", self.groupId, " Count:", cnt)
+  --[[
+  local x, y = self:GetCenter()
+  local parentX, parentY = UIParent:GetCenter()
+  if ( x > parentX ) then
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+  else
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+  end
+  GameTooltip:SetText(text)
+  GameTooltip:Show()
+  ]]
+end
+
+function HamsterGatherWorldMapPinMixin:OnMouseLeave()
+  for _, pin in ipairs(worldmapPins) do
+    pin:SetAlpha(0.6)
+  end
+
+	--GameTooltip:Hide()
 end
