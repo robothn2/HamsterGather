@@ -109,9 +109,16 @@ function HamsterGather:OnInitialize()
   local default_db = {
     profile = {
       debug = false,
-      resources = {}, -- 方便UI显示的采集数据，格式：{[resCategory] = {[mapId] = { [resId] = { show = true, respawns = {{x,y, gatherTime, gatherCharName, groupId}, ...}}}}}
-      maxRecordCount = 100, -- 保留的采集历史记录最大条数，超过时会移除前面的一半记录
-      histories = {},       -- 采集历史记录，格式：{mapId, x, y, resId, resCount, gatherTime, gatherCharName}
+      resources = {},       -- 方便UI显示的采集数据，格式：{[resCategory] = {[mapId] = { [resId] = { show = true, respawns = {{x,y, gatherTime, gatherCharName, groupId}, ...}}}}}
+      histories = {},       -- 采集历史数据，格式：{mapId, x, y, resId, resCount, gatherTime, gatherCharName}
+      historyMaxCount = 100,-- 保留的采集历史记录最大条数，超过时会移除前面的记录
+      groupResources = { -- 分组计算资源设置
+        [4625] = {1427}, -- 火焰花 - 灼热峡谷
+        [3369] = {1431}, -- 墓地苔 - 暮色森林
+        [3818] = {}, -- 枯叶草 - 所有区域
+      },
+      persistGroupConflicts = {}, -- 持久化存储分组计算的冲突矩阵，格式：{[mapId] = {[resId] = {[respawnId1] = {[respawnId2] = true, ...}, ...}}}
+      historyProcessedTs = 0,  -- 上次分组计算时已经处理的历史数据的最新时间戳
     },
   }
   for _, res in ipairs(resourceCategories) do
@@ -144,6 +151,24 @@ function HamsterGather:OnEnable()
   self:SKILL_LINES_CHANGED()
 
 	self.HBD.RegisterCallback(self, "PlayerZoneChanged", "updateMinimap")
+
+  -- 历史采集数据的分组计算
+  self:ComputeAllGroups()
+
+  -- 历史采集数据清理
+  local histories = self.db.profile.histories
+  local historyMaxCount = self.db.profile.historyMaxCount
+  if #histories > historyMaxCount then
+    local count = #histories
+    local offset = count - historyMaxCount
+    for i = 1, historyMaxCount do
+      histories[i] = histories[i + offset]
+    end
+    for i = historyMaxCount + 1, count do
+      histories[i] = nil
+    end
+  end
+
   self:Print(L["HamsterGather"], "loaded.")
 end
 
@@ -362,7 +387,7 @@ end
 -- @param mapId 地图ID
 -- @param resId 资源ID
 -- @return table groups 分组结果: { [1] = {respawnId1, respawnId2}, [2] = {...} }
-function HamsterGather:ComputeGroups2(mapId, resId)
+function HamsterGather:ComputeGroupsInternal(mapId, resId)
   local MAX_GROUP_SIZE = 6     -- 每组最多 6 个点
   local MAX_NEIGHBOR_DISTANCE = 800 -- 最大允许 x,y 各 20 点差值
   local ROUND_MAX_GAP = 300    -- 5 分钟 (300秒) 冲突判定
@@ -376,17 +401,24 @@ function HamsterGather:ComputeGroups2(mapId, resId)
     end
   end
 
-  local mapResRespawns = self.db.profile.resources[resCat.abbr].data[mapId][resId].respawns
+  local resCategoryData = self.db.profile.resources[resCat.abbr].data
+  if next(resCategoryData) == nil then return end
+  local mapResRespawns = resCategoryData[mapId][resId].respawns
+  local historyProcessedTs = self.db.profile.historyProcessedTs
   local histories = {}
   for _, r in ipairs(self.db.profile.histories) do
     -- {now, mapId, x, y, resId, resCount, self.playerName}
-    if r[2] == mapId and r[5] == resId then
-      local respawn = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
-      table.insert(histories, {ts = r[1], id = respawn[5]})
+    if historyProcessedTs < r[1] then -- 忽略上次计算分组时已经处理的数据
+      if r[2] == mapId and r[5] == resId then
+        local respawn = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+        if respawn then -- 有可能不存在
+          table.insert(histories, {ts = r[1], id = respawn[5]})
+        end
+      end
     end
   end
-  self:Debug("Totally ".. #histories .. " records")
   if #histories == 0 then return end
+  self:Debug("Totally ".. #histories .. " records")
 
   -- 按时间顺序排序采集记录
   table.sort(histories, function(a, b) return a.ts < b.ts end)
@@ -411,7 +443,7 @@ function HamsterGather:ComputeGroups2(mapId, resId)
   local respawns = {}
   for respawnId, respawn in ipairs(mapResRespawns) do
     local respawnInfo = { x = respawn[1], y = respawn[2],
-      cornerDistances = {
+      cornerDistances = { -- 资源点与四个角的距离
         topleft = calcDistance(respawn[1], respawn[2], 0, 0),
         bottomleft = calcDistance(respawn[1], respawn[2], 0, 100),
         bottomright = calcDistance(respawn[1], respawn[2], 100, 100),
@@ -424,6 +456,26 @@ function HamsterGather:ComputeGroups2(mapId, resId)
     respawns[respawnId] = respawnInfo
   end
 
+  self:Debug("begin build conflicts for map res:", mapId, resId)
+  -- 从持久化存储的冲突矩阵中恢复分组互斥标记
+  -- 冲突矩阵格式：{[mapId] = {[resId] = {[respawnId1] = {[respawnId2] = true, ...}, ...}}}
+  self.db.profile.persistGroupConflicts = self.db.profile.persistGroupConflicts or {}
+  local persistGroupConflicts = self.db.profile.persistGroupConflicts
+  persistGroupConflicts[mapId] = persistGroupConflicts[mapId] or {}
+  persistGroupConflicts[mapId][resId] = persistGroupConflicts[mapId][resId] or {}
+  local persistConflicts = persistGroupConflicts[mapId][resId]
+  for respawnId1, conflictLine in pairs(persistConflicts) do
+    for i = 1, #conflictLine do
+      assert(#conflictLine + respawnId1 == #respawns)
+      local respawnId2 = respawnId1 + i
+      assert(respawnId2 > respawnId1)
+      if conflictLine:sub(i, i) == '1' then
+        respawns[respawnId1][respawnId2].conflict = true
+        --self:Debug("restore conflict:", respawnId1, respawnId2, " by:", conflictLine)
+      end
+    end
+  end
+
   -- 处理采集历史记录，根据时间间隔更新资源点分组互斥标记 respawns[respawnId A][respawnId B].conflict
   local n = #histories
   for i = 1, n do
@@ -434,9 +486,23 @@ function HamsterGather:ComputeGroups2(mapId, resId)
       local u, v = histories[i].id, histories[j].id
       if u ~= v then
         if u > v then u,v = v,u end -- respawns 表是有下标顺序要求的，小的在前
-        respawns[u][v].conflict = true
+        if not respawns[u][v].conflict then
+          respawns[u][v].conflict = true
+          self:Debug("mark conflict:", u, v)
+        end
       end
     end
+  end
+
+  -- 持久化冲突矩阵
+  for respawnId1, others in pairs(respawns) do
+    local slice = {unpack(others, respawnId1 + 1, #respawns)} -- 注意 others 还有 x, y, cornerDistances 等属性
+    local conflictLine = {}
+    for i, item in ipairs(slice) do
+      conflictLine[i] = item.conflict and "1" or "0"
+    end
+    persistConflicts[respawnId1] = table.concat(conflictLine)
+    --self:Debug(respawnId1, persistConflicts[respawnId1])
   end
 
   -- 辅助函数：检查资源节点是否与当前组 groupMembers 中的任何节点冲突
@@ -458,7 +524,6 @@ function HamsterGather:ComputeGroups2(mapId, resId)
     unassigned[respawnId] = true
     totalUnassignedCount = totalUnassignedCount + 1
   end
-
   
   -- 按地图4个角的顺序选择一个角，选择最接近当前角的一个未分配组的资源点
   -- 以灼热平原的火焰花为例，正上方只有一个资源组，且经常被卡在一个无法采集的点，一般从左上角逆时针或者右上角顺时针采集，所以选取角的顺序要跟着地图走
@@ -469,9 +534,9 @@ function HamsterGather:ComputeGroups2(mapId, resId)
     for respawnId, _ in pairs(unassignedRespawns) do
       table.insert(res, respawnId)
     end
-    self:Debug(corner, " has unassigned respawns:", table.concat(res, ','))
+    --self:Debug(corner, " has unassigned respawns:", table.concat(res, ','))
     table.sort(res, function(a, b) return respawns[a].cornerDistances[corner] < respawns[b].cornerDistances[corner] end)
-    self:Debug("unassigned respawns sorted by corner distance:", table.concat(res, ','))
+    --self:Debug("unassigned respawns sorted by corner distance:", table.concat(res, ','))
     return res[1]
   end
 
@@ -524,9 +589,26 @@ function HamsterGather:ComputeGroups2(mapId, resId)
       mapResRespawns[respawnId][5] = groupId
     end
   end
-  HGWorldMapDataProvider:RefreshAllData()
 
   return groups
+end
+
+function HamsterGather:ComputeAllGroups()
+  local ret = {}
+  -- 历史数据的分组计算
+  if self.db.profile.groupResources then
+    for resId, mapIds in pairs(self.db.profile.groupResources) do
+      for _, mapId in ipairs(mapIds) do
+        ret[mapId] = ret[mapId] or {}
+        ret[mapId][resId] = self:ComputeGroupsInternal(mapId, resId)
+      end
+    end
+  end
+  -- 更新历史数据已处理时间戳
+  self.db.profile.historyProcessedTs = GetServerTime()
+  
+  HGWorldMapDataProvider:RefreshAllData()
+  return ret
 end
 
 -- 支持斜线开始的命令
@@ -540,9 +622,9 @@ function HamsterGather:HandleSlash(msg)
   if cmd == "group" then
     local mapId = C_Map.GetBestMapForUnit("player")
     local resId = tonumber(rest)
-    local groups = self:ComputeGroups2(mapId, resId)
-    if groups then
-      for i, group in ipairs(groups) do
+    local allGroups = self:ComputeAllGroups()
+    if allGroups[mapId] and allGroups[mapId][resId] then
+      for i, group in ipairs(allGroups[mapId][resId]) do
         self:Print("Group", i, ": {", table.concat(group, ","), "}")
       end
     end
@@ -696,7 +778,7 @@ function HamsterGatherWorldMapPinMixin:OnMouseEnter()
       cnt = cnt + 1
     end
   end
-  print("Group:", self.groupId, " Count:", cnt)
+  --print("Group:", self.groupId, " Count:", cnt)
   --[[
   local x, y = self:GetCenter()
   local parentX, parentY = UIParent:GetCenter()
