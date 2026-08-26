@@ -378,7 +378,7 @@ function HamsterGather:FindRespawn(mapResRespawns, x, y, resCat)
   for i, respawn in ipairs(mapResRespawns) do
     local distancePower2 = (x - respawn[1]) * (x - respawn[1]) + (y - respawn[2]) * (y - respawn[2])
     if distancePower2 < resCat.sameDistancePower2 then
-      return respawn
+      return respawn, i
     end
   end
 end
@@ -410,15 +410,15 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
     -- {now, mapId, x, y, resId, resCount, self.playerName}
     if historyProcessedTs < r[1] then -- 忽略上次计算分组时已经处理的数据
       if r[2] == mapId and r[5] == resId then
-        local respawn = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
-        if respawn then -- 有可能不存在
-          table.insert(histories, {ts = r[1], id = respawn[5]})
+        local respawn, respawnId = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+        if respawn ~= nil then -- 有可能不存在
+          table.insert(histories, {ts = r[1], id = respawnId})
         end
       end
     end
   end
   if #histories == 0 then return end
-  self:Debug("Totally ".. #histories .. " records")
+  self:Debug(string.format("Map(%d) res(%d) has %d new records", mapId, resId, #histories))
 
   -- 按时间顺序排序采集记录
   table.sort(histories, function(a, b) return a.ts < b.ts end)
@@ -456,7 +456,6 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
     respawns[respawnId] = respawnInfo
   end
 
-  self:Debug("begin build conflicts for map res:", mapId, resId)
   -- 从持久化存储的冲突矩阵中恢复分组互斥标记
   -- 冲突矩阵格式：{[mapId] = {[resId] = {[respawnId1] = {[respawnId2] = true, ...}, ...}}}
   self.db.profile.persistGroupConflicts = self.db.profile.persistGroupConflicts or {}
@@ -465,13 +464,12 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
   persistGroupConflicts[mapId][resId] = persistGroupConflicts[mapId][resId] or {}
   local persistConflicts = persistGroupConflicts[mapId][resId]
   for respawnId1, conflictLine in pairs(persistConflicts) do
+    -- 这里如果上次发现了新的资源点，两者之和与资源点总数量是不一致的，可以部分恢复
+    --assert(respawnId1 + #conflictLine == #respawns)
     for i = 1, #conflictLine do
-      assert(#conflictLine + respawnId1 == #respawns)
       local respawnId2 = respawnId1 + i
-      assert(respawnId2 > respawnId1)
       if conflictLine:sub(i, i) == '1' then
         respawns[respawnId1][respawnId2].conflict = true
-        --self:Debug("restore conflict:", respawnId1, respawnId2, " by:", conflictLine)
       end
     end
   end
@@ -485,6 +483,9 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
       end
       local u, v = histories[i].id, histories[j].id
       if u ~= v then
+        if u == nil or v == nil then
+          self:Debug(string.format("%d(%d) %d(%d)", i, histories[i].ts, j, histories[j].ts), u, v)
+        end
         if u > v then u,v = v,u end -- respawns 表是有下标顺序要求的，小的在前
         if not respawns[u][v].conflict then
           respawns[u][v].conflict = true
@@ -595,6 +596,7 @@ end
 
 function HamsterGather:ComputeAllGroups()
   local ret = {}
+  local historyProcessedTs = self.db.profile.historyProcessedTs
   -- 历史数据的分组计算
   if self.db.profile.groupResources then
     for resId, mapIds in pairs(self.db.profile.groupResources) do
@@ -606,6 +608,7 @@ function HamsterGather:ComputeAllGroups()
   end
   -- 更新历史数据已处理时间戳
   self.db.profile.historyProcessedTs = GetServerTime()
+  self:Print(string.format("History processed timestamp: %d -> %d", historyProcessedTs, self.db.profile.historyProcessedTs))
   
   HGWorldMapDataProvider:RefreshAllData()
   return ret
