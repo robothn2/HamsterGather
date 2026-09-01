@@ -323,7 +323,7 @@ function HamsterGather:OnEvent(event, ...)
     else
       count = 1
     end
-    self:handleResourceGathered(self.current.resCat, tonumber(itemId), count)
+    self:handleResourceGathered(self.playerName, GetServerTime(), self.current.resCat, tonumber(itemId), count)
   elseif event == "ZONE_CHANGED_NEW_AREA" then
     self:updateMinimap()
   end
@@ -340,18 +340,18 @@ function HamsterGather:resetLootTimer(resCat)
   end)
 end
 
-function HamsterGather:handleResourceGathered(resCat, resId, resCount)
+function HamsterGather:handleResourceGathered(gatherChar, gatherTime, resCat, resId, resCount)
   if not resCat then return end
   local x, y, mapId = self:getPosFrontOfPlayerFacing(resCat.posShiftFacing)
   -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
   -- /dump GetServerTime()
-  local now = GetServerTime()
-  self:Debug(now, mapId, resCat.abbr, resId, resCount, x, y)
+  self:Debug(gatherTime, mapId, resCat.abbr, resId, resCount, x, y)
   -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
-  self:updateResDBPosition(resCat, resId, resCount, mapId, math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100, now)
+  self:updateResDBPosition(gatherChar, gatherTime, resCat, resId, resCount, mapId,
+                           math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100)
 end
 
-function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y, now)
+function HamsterGather:updateResDBPosition(gatherChar, gatherTime, resCat, resId, resCount, mapId, x, y)
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[resId] then return end
 
@@ -360,13 +360,13 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   -- 例如：堆叠数当前为 18，最大 20，捡取3个时会拆分成 2 和 1 两条
   local prevHistory = histories[#histories]
   if prevHistory then
-    if now == prevHistory[1] and resId == prevHistory[5] then
+    if gatherTime == prevHistory[1] and resId == prevHistory[5] then
       self:Debug("Combined history", resId, prevHistory[6], "->", prevHistory[6] + resCount)
       prevHistory[6] = prevHistory[6] + resCount
     end
   end
   -- 增加采集历史记录
-  table.insert(histories, {now, mapId, x, y, resId, resCount, self.playerName})
+  table.insert(histories, {gatherTime, mapId, x, y, resId, resCount, gatherChar})
 
   local data = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
@@ -377,11 +377,11 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   -- 增加资源采集点(respawn)
   local respawn = self:FindRespawn(mapResRespawns, x, y, resCat)
   if respawn then
-    respawn[3] = now
-    respawn[4] = self.playerName
-    --self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
+    respawn[3] = gatherTime
+    respawn[4] = gatherChar
+    --self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), gatherTime, gatherChar)
   else
-    table.insert(mapResRespawns, {x, y, now, self.playerName})
+    table.insert(mapResRespawns, {x, y, gatherTime, gatherChar})
     self:updateMinimap()
   end
 end
