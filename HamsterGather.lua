@@ -2,9 +2,10 @@
 	This addon designed to be as lightweight as possible.
 	It will only track Mine, Herbal resources.
 ]]
-local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEvent-3.0", "AceConsole-3.0")
+local HamsterGather = LibStub("AceAddon-3.0"):NewAddon("HamsterGather", "AceEvent-3.0", "AceConsole-3.0", "AceComm-3.0", "AceSerializer-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("HamsterGather", false)
 
+local HG_PREFIX = "HamsterGather" -- addon 消息前缀
 -- all register events list below  
 local registerEvents = {
   --"UNIT_SPELLCAST_START",
@@ -56,13 +57,6 @@ local resourceCategories = {
       [13465] = true, -- 山鼠草
       [13466] = true, -- 瘟疫花
       [13468] = true, -- 黑莲花
-    },
-    ids2Analyze = { -- 需要分析的资源点，用于分析资源点的分组
-      [3818] = true, -- 枯叶草
-      [4625] = true, -- 火焰花
-      [13463] = true, -- 梦叶草
-      [13465] = true, -- 山鼠草
-      [13466] = true, -- 瘟疫花
     },
   },
   {
@@ -134,6 +128,7 @@ function HamsterGather:OnInitialize()
   self.minimapPins = {}
 
   self:RegisterChatCommand("hg", "HandleSlash")
+  self:RegisterComm(HG_PREFIX, "OnCommReceived")
 end
 
 function HamsterGather:OnEnable()
@@ -227,75 +222,23 @@ function HamsterGather:SKILL_LINES_CHANGED()
 end
 
 function HamsterGather:getPosFrontOfPlayerFacing(distanceYard)
+  -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
   local normX, normY, mapId = self.HBD:GetPlayerZonePosition()
-  if not normX or not mapId then return nil, nil, nil end
+  if not normX or not mapId then return end
   if not distanceYard or distanceYard == 0 then
     return normX, normY, mapId
   end
 
   local width, height = self.HBD:GetZoneSize(mapId)
-  if not width or width <= 0 then return nil, nil, nil end
+  if not width or width <= 0 then return end
 
   local facing = GetPlayerFacing() 
-  if facing == nil then return nil, nil, nil end
+  if facing == nil then return end
 
   local dx = math.sin(facing + math.pi) * distanceYard
   local dy = math.cos(facing + math.pi) * distanceYard
   return normX + (dx / width), normY + (dy / height), mapId
 end
-
---[[ event flow & handlers
-1.herbal gather flow：
-[19:26:03] CURSOR_CHANGED true 0 0 0
-[19:26:03] UNIT_SPELLCAST_START player Cast-3-5343-0-41-2366-0000F1CC4B 2366 4
-[19:26:08] UNIT_SPELLCAST_SUCCEEDED player Cast-3-5343-0-41-2366-0000F1CC4B 2366 4
-[19:26:08] LOOT_READY true
-[19:26:08] CURSOR_CHANGED true 0 0 0
-[19:26:08] LOOT_OPENED true
-[19:26:08] LOOT_READY true
-[19:26:08] CURSOR_CHANGED true 0 0 0
-[19:26:09] LOOT_CLOSED
-[19:26:09] LOOT_CLOSED
-[19:26:09] 你得到了物品：[梦叶草]x2。
-[19:26:09] CHAT_MSG_LOOT 你得到了物品：[梦叶草]x2。    Demi  0 0  0 1090 nil 0 false false false false
-[19:26:09] CURSOR_CHANGED true 0 0 0
-
-2.mining flow:
-[19:21:21] CURSOR_CHANGED true 0 0 0
-[19:21:21] UNIT_SPELLCAST_START player Cast-3-5343-0-41-10248-000071CAF5 10248 2
-[19:21:25] UNIT_SPELLCAST_SUCCEEDED player Cast-3-5343-0-41-10248-000071CAF5 10248 2
-[19:21:25] LOOT_READY true
-[19:21:25] CURSOR_CHANGED true 0 0 0
-[19:21:25] LOOT_OPENED true
-[19:21:25] LOOT_READY true
-[19:21:25] CURSOR_CHANGED true 0 0 0
-[19:21:25] 你获得了物品：[瑟银矿石]。
-[19:21:25] CHAT_MSG_LOOT 你获得了物品：[瑟银矿石]。    Demi  0 0  0 1078 nil 0 false false false false
-[19:21:25] LOOT_CLOSED
-[19:21:25] LOOT_CLOSED
-[19:21:25] 你获得了物品：[厚重的石头]。
-[19:21:25] CHAT_MSG_LOOT 你获得了物品：[厚重的石头]。    Demi  0 0  0 1079 nil 0 false false false false
-[19:21:25] CURSOR_CHANGED true 0 0 0
-[19:21:25] UNIT_INVENTORY_CHANGED player
-
-3.fishing flow:
-[18:11:41] CURSOR_CHANGED true 0 0 0
-[18:11:42] UNIT_SPELLCAST_CHANNEL_START player nil 18248 8
-[18:11:42] UNIT_SPELLCAST_SUCCEEDED player Cast-3-5343-1-15-18248-000071BADE 18248 nil
-[18:11:43] CURSOR_CHANGED true 0 0 0
-[18:11:05] CURSOR_CHANGED true 0 0 0
-[18:11:05] CURSOR_CHANGED true 0 0 0
-[18:11:06] UNIT_SPELLCAST_CHANNEL_STOP player nil 18248 nil 8
-[18:11:06] CURSOR_CHANGED true 0 0 0
-[18:11:06] LOOT_READY true
-[18:11:06] LOOT_OPENED true
-[18:11:06] LOOT_READY true
-[18:11:06] LOOT_CLOSED
-[18:11:06] LOOT_CLOSED
-[18:11:06] 你获得了物品：[火鳞鳝鱼]。
-[18:11:06] CHAT_MSG_LOOT 你获得了物品：[火鳞鳝鱼]。    Papaya  0 0  0 488 nil 0 false false false false
-[18:11:07] UNIT_INVENTORY_CHANGED player
-]]
 
 function HamsterGather:OnEvent(event, ...)
 	--self:Debug(event, ...)
@@ -323,7 +266,18 @@ function HamsterGather:OnEvent(event, ...)
     else
       count = 1
     end
-    self:handleResourceGathered(self.playerName, GetServerTime(), self.current.resCat, tonumber(itemId), count)
+    -- /dump GetServerTime()
+    local resCat = self.current.resCat
+    local x, y, mapId = self:getPosFrontOfPlayerFacing(resCat.posShiftFacing)
+    local data = {
+      ts = GetServerTime(), sender = self.playerName, resId = tonumber(itemId), resCount = count, cat = resCat.abbr,
+      -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数，最后一位小数四舍五入
+      map = mapId, x = math.floor(x * 10000 + 0.5) / 100, y = math.floor(y * 10000 + 0.5) / 100,
+    }
+    self:Debug(data.ts, data.sender, data.cat, data.resId, data.resCount, data.map, data.x, data.y)
+
+    self:updateResDB(resCat, data)
+    self:sendResourceGatherToOthers(data)
   elseif event == "ZONE_CHANGED_NEW_AREA" then
     self:updateMinimap()
   end
@@ -340,48 +294,56 @@ function HamsterGather:resetLootTimer(resCat)
   end)
 end
 
-function HamsterGather:handleResourceGathered(gatherChar, gatherTime, resCat, resId, resCount)
-  if not resCat then return end
-  local x, y, mapId = self:getPosFrontOfPlayerFacing(resCat.posShiftFacing)
-  -- /dump C_Map.GetPlayerMapPosition(C_Map.GetBestMapForUnit("player"), "player"):GetXY()
-  -- /dump GetServerTime()
-  self:Debug(gatherTime, mapId, resCat.abbr, resId, resCount, x, y)
-  -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数
-  self:updateResDBPosition(gatherChar, gatherTime, resCat, resId, resCount, mapId,
-                           math.floor(x * 10000 + 0.5) / 100, math.floor(y * 10000 + 0.5) / 100)
+function HamsterGather:sendResourceGatherToOthers(data)
+  -- /dump IsInGroup(),IsInRaid()
+  if not IsInGroup() then return end
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  local msg = self:Serialize(data)
+  -- priority: "ALERT", "NORMAL", "BULK"
+  self:SendCommMessage(HG_PREFIX, msg, channel, nil, "NORMAL")
 end
 
-function HamsterGather:updateResDBPosition(gatherChar, gatherTime, resCat, resId, resCount, mapId, x, y)
+function HamsterGather:OnCommReceived(prefix, message, channel, sender)
+  -- self:Debug(sender, message)
+  if prefix ~= HG_PREFIX or sender == self.playerName then return end
+  local success, data = self:Deserialize(message)
+  if success then
+    self:Debug(data.ts, data.sender, data.cat, data.resId, data.resCount, data.map, data.x, data.y)
+    local resCat = self.resCatsByProfAbbr[data.cat]
+    self:updateResDB(resCat, data)
+  end
+end
+
+function HamsterGather:updateResDB(resCat, data)
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
-  if not resCat or not resCat.ids[resId] then return end
+  if not resCat or not resCat.ids[data.resId] then return end
 
   local histories = self.db.profile.histories
   -- 当捡取可堆叠资源时，如果加上捡取的资源会超过整组，会被拆分为两条消息，这里把它们合并为一条
   -- 例如：堆叠数当前为 18，最大 20，捡取3个时会拆分成 2 和 1 两条
   local prevHistory = histories[#histories]
   if prevHistory then
-    if gatherTime == prevHistory[1] and resId == prevHistory[5] then
-      self:Debug("Combined history", resId, prevHistory[6], "->", prevHistory[6] + resCount)
-      prevHistory[6] = prevHistory[6] + resCount
+    if data.ts == prevHistory[1] and data.resId == prevHistory[5] then
+      self:Debug("Combined history", data.resId, prevHistory[6], "->", prevHistory[6] + data.resCount)
+      prevHistory[6] = prevHistory[6] + data.resCount
     end
   end
   -- 增加采集历史记录
-  table.insert(histories, {gatherTime, mapId, x, y, resId, resCount, gatherChar})
+  table.insert(histories, {data.ts, data.map, data.x, data.y, data.resId, data.resCount, data.sender})
 
-  local data = self.db.profile.resources[resCat.abbr].data
+  local resCategoryData = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
-  data[mapId] = data[mapId] or {}
-  data[mapId][resId] = data[mapId][resId] or {show=true, respawns={}}
-  local mapResRespawns = data[mapId][resId].respawns
+  resCategoryData[data.map] = resCategoryData[data.map] or {}
+  resCategoryData[data.map][data.resId] = resCategoryData[data.map][data.resId] or {show=true, respawns={}}
+  local mapResRespawns = resCategoryData[data.map][data.resId].respawns
 
   -- 增加资源采集点(respawn)
-  local respawn = self:FindRespawn(mapResRespawns, x, y, resCat)
+  local respawn = self:FindRespawn(mapResRespawns, data.x, data.y, resCat)
   if respawn then
-    respawn[3] = gatherTime
-    respawn[4] = gatherChar
-    --self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), gatherTime, gatherChar)
+    respawn[3] = data.ts
+    respawn[4] = data.sender
   else
-    table.insert(mapResRespawns, {x, y, gatherTime, gatherChar})
+    table.insert(mapResRespawns, {data.x, data.y, data.ts, data.sender})
     self:updateMinimap()
   end
 end
