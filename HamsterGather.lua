@@ -415,6 +415,7 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
 
   local resCategoryData = self.db.profile.resources[resCat.abbr].data
   if next(resCategoryData) == nil then return end
+  if resCategoryData[mapId] == nil or resCategoryData[mapId][resId] == nil then return end
   local mapResRespawns = resCategoryData[mapId][resId].respawns
   local historyProcessedTs = self.db.profile.historyProcessedTs
   local histories = {}
