@@ -113,6 +113,8 @@ function HamsterGather:OnInitialize()
       histories = {},       -- 采集历史数据，格式：{mapId, x, y, resId, resCount, gatherTime, gatherCharName}
       historyMaxCount = 100,-- 保留的采集历史记录最大条数，超过时会移除前面的记录
       groupResources = { -- 分组计算资源设置
+        [13465] = {1423},-- 山鼠草 - 东瘟疫之地
+        [13466] = {1423},-- 瘟疫花 - 东瘟疫之地
         [4625] = {1427}, -- 火焰花 - 灼热峡谷
         [3369] = {1431}, -- 墓地苔 - 暮色森林
         [3818] = {}, -- 枯叶草 - 所有区域
@@ -353,8 +355,17 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[resId] then return end
 
-  -- 增加采集历史记录
   local histories = self.db.profile.histories
+  -- 当捡取可堆叠资源时，如果加上捡取的资源会超过整组，会被拆分为两条消息，这里把它们合并为一条
+  -- 例如：堆叠数当前为 18，最大 20，捡取3个时会拆分成 2 和 1 两条
+  local prevHistory = histories[#histories]
+  if prevHistory then
+    if now == prevHistory[1] and resId == prevHistory[5] then
+      self:Debug("Combined history", resId, prevHistory[6], "->", prevHistory[6] + resCount)
+      prevHistory[6] = prevHistory[6] + resCount
+    end
+  end
+  -- 增加采集历史记录
   table.insert(histories, {now, mapId, x, y, resId, resCount, self.playerName})
 
   local data = self.db.profile.resources[resCat.abbr].data
@@ -363,11 +374,12 @@ function HamsterGather:updateResDBPosition(resCat, resId, resCount, mapId, x, y,
   data[mapId][resId] = data[mapId][resId] or {show=true, respawns={}}
   local mapResRespawns = data[mapId][resId].respawns
 
+  -- 增加资源采集点(respawn)
   local respawn = self:FindRespawn(mapResRespawns, x, y, resCat)
   if respawn then
     respawn[3] = now
     respawn[4] = self.playerName
-    self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
+    --self:Debug(string.format("map[%d] res[%d] pos[%f,%f] updated to:", mapId, resId, x, y), now, self.playerName)
   else
     table.insert(mapResRespawns, {x, y, now, self.playerName})
     self:updateMinimap()
