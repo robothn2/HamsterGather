@@ -30,6 +30,7 @@ local resourceCategories = {
     lootTimeout=2,        -- 采集资源的施法完成后，超时时间之外获取的战利品都会被忽略
     posShiftFacing=1,     -- 采集成功后玩家位置和资源点的距离，按玩家面对方向往前计算码数
     sameDistancePower2=1, -- 认定为同一刷新点的距离
+    conflictSeconds=500,  -- 两个资源点都采集到了资源，当采集时间间隔在此数值以内，视为组冲突，即：两者必定从属不同资源分组
     ids = {
       [765] = true,  -- 银叶草
       [785] = true,  -- 魔皇草
@@ -62,6 +63,7 @@ local resourceCategories = {
   {
     abbr="mine", profession=L["Mining"], spells={10248},
     lootTimeout=2, posShiftFacing=1, sameDistancePower2=1,
+    conflictSeconds=500,
     ids = {
       [2770] = true,  -- 铜矿石
       [2771] = true,  -- 锡矿石
@@ -107,10 +109,10 @@ function HamsterGather:OnInitialize()
       histories = {},       -- 采集历史数据，格式：{mapId, x, y, resId, resCount, gatherTime, gatherCharName}
       historyMaxCount = 100,-- 保留的采集历史记录最大条数，超过时会移除前面的记录
       groupResources = { -- 分组计算资源设置
-        [13465] = {1423},-- 山鼠草 - 东瘟疫之地
-        [13466] = {1423},-- 瘟疫花 - 东瘟疫之地
-        [4625] = {1427}, -- 火焰花 - 灼热峡谷
-        [3369] = {1431}, -- 墓地苔 - 暮色森林
+        [13465] = {[1423]=true},-- 山鼠草 - 东瘟疫之地
+        [13466] = {[1423]=true},-- 瘟疫花 - 东瘟疫之地
+        [4625] = {[1427]=true}, -- 火焰花 - 灼热峡谷
+        [3369] = {[1431]=true}, -- 墓地苔 - 暮色森林
         [3818] = {}, -- 枯叶草 - 所有区域
       },
       persistGroupConflicts = {}, -- 持久化存储分组计算的冲突矩阵，格式：{[mapId] = {[resId] = {[respawnId1] = {[respawnId2] = true, ...}, ...}}}
@@ -338,13 +340,66 @@ function HamsterGather:updateResDB(resCat, data)
   local mapResRespawns = resCategoryData[data.map][data.resId].respawns
 
   -- 增加资源采集点(respawn)
-  local respawn = self:FindRespawn(mapResRespawns, data.x, data.y, resCat)
+  local respawn, respawnId = self:FindRespawn(mapResRespawns, data.x, data.y, resCat)
   if respawn then
     respawn[3] = data.ts
     respawn[4] = data.sender
   else
     table.insert(mapResRespawns, {data.x, data.y, data.ts, data.sender})
-    self:updateMinimap()
+    respawnId = #mapResRespawns
+  end
+
+  self:markRespawnConflicts(resCat, mapResRespawns, data, respawnId)
+
+  self:updateMinimap()
+end
+
+function HamsterGather:markRespawnConflicts(resCat, mapResRespawns, newData, newRespawnId)
+  local gres = self.db.profile.groupResources
+  if not gres or not gres[newData.resId] then return end
+  if next(gres[newData.resId]) ~= nil and not gres[newData.resId][newData.map] then return end
+
+  local allConflicts = self.db.profile.persistGroupConflicts or {}
+  self.db.profile.persistGroupConflicts = allConflicts
+  allConflicts[newData.map] = allConflicts[newData.map] or {}
+  allConflicts[newData.map][newData.resId] = allConflicts[newData.map][newData.resId] or {}
+  local conflicts = allConflicts[newData.map][newData.resId]
+  
+  local timestampBegin = newData.ts - (resCat.conflictSeconds or 500)
+  local histories = self.db.profile.histories
+  --self:Debug("Check history begin:", timestampBegin, #histories)
+
+  for i = #histories - 1, 1, -1 do
+    local r = histories[i]
+    --self:Debug("history:", i, r[1], r[2], r[5])
+    -- format: {timestamp, mapId, x, y, resId, resCount, self.playerName}
+    if r[1] < timestampBegin then break end
+    if r[2] == newData.map and r[5] == newData.resId then
+      --self:Debug("found history:", r[3], r[4])
+      local _, respawnId = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+      if respawnId ~= nil then -- 有可能不存在
+        self:markConflict(#mapResRespawns, conflicts, newRespawnId, respawnId)
+      end
+    end
+  end
+end
+
+function HamsterGather:markConflict(respawnCnt, conflicts, respawnId1, respawnId2)
+  if respawnId2 ~= respawnId1 then
+    local u, v = respawnId1, respawnId2
+    if u > v then u,v = v,u end -- conflicts 表有下标顺序要求，小的在前
+    local line = conflicts[u] or string.rep("0", respawnCnt - u)
+    if u + #line < respawnCnt then
+      line = line .. string.rep("0", respawnCnt - u - #line)
+    end
+    local shift = v - u
+    if line:sub(shift, shift) == '0' then
+      line = string.sub(line, 1, shift - 1) .. '1' .. string.sub(line, shift + 1)
+      self:Debug("mark conflict:", u, v)
+      self:Debug(conflicts[u], "->", line)
+    end
+    assert(u + #line == respawnCnt)
+    conflicts[u] = line
   end
 end
 
@@ -364,7 +419,6 @@ end
 function HamsterGather:ComputeGroupsInternal(mapId, resId)
   local MAX_GROUP_SIZE = 6     -- 每组最多 6 个点
   local MAX_NEIGHBOR_DISTANCE = 800 -- 最大允许 x,y 各 20 点差值
-  local ROUND_MAX_GAP = 300    -- 5 分钟 (300秒) 冲突判定
 
   local resCat
   -- 通过 resId 获取资源分类信息
@@ -375,6 +429,7 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
     end
   end
 
+  local ROUND_MAX_GAP = resCat.conflictSeconds or 500    -- 冲突判定时间窗口
   local resCategoryData = self.db.profile.resources[resCat.abbr].data
   if next(resCategoryData) == nil then return end
   if resCategoryData[mapId] == nil or resCategoryData[mapId][resId] == nil then return end
@@ -575,9 +630,11 @@ function HamsterGather:ComputeAllGroups()
   -- 历史数据的分组计算
   if self.db.profile.groupResources then
     for resId, mapIds in pairs(self.db.profile.groupResources) do
-      for _, mapId in ipairs(mapIds) do
-        ret[mapId] = ret[mapId] or {}
-        ret[mapId][resId] = self:ComputeGroupsInternal(mapId, resId)
+      for mapId, enabled in pairs(mapIds) do
+        if enabled then
+          ret[mapId] = ret[mapId] or {}
+          ret[mapId][resId] = self:ComputeGroupsInternal(mapId, resId)
+        end
       end
     end
   end
