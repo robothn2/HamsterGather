@@ -31,6 +31,7 @@ local resourceCategories = {
     posShiftFacing=1,     -- 采集成功后玩家位置和资源点的距离，按玩家面对方向往前计算码数
     sameDistancePower2=1, -- 认定为同一刷新点的距离
     conflictSeconds=500,  -- 两个资源点都采集到了资源，当采集时间间隔在此数值以内，视为组冲突，即：两者必定从属不同资源分组
+    respawnSeconds={default=900},   -- 经过实际蹲点统计，枯叶草/火焰花的刷新时间约为 15min(900秒)
     ids = {
       [765] = true,  -- 银叶草
       [785] = true,  -- 魔皇草
@@ -64,6 +65,7 @@ local resourceCategories = {
     abbr="mine", profession=L["Mining"], spells={10248},
     lootTimeout=2, posShiftFacing=1, sameDistancePower2=1,
     conflictSeconds=500,
+    respawnSeconds={default=900},
     ids = {
       [2770] = true,  -- 铜矿石
       [2771] = true,  -- 锡矿石
@@ -79,6 +81,10 @@ local resourceCategories = {
   {
     abbr="fish", profession=L["Fishing"], spells={18248},
     lootTimeout=2, posShiftFacing=15, sameDistancePower2=1,
+    respawnSeconds={
+      default = 3600, -- 黑口鱼/火鳞鳝鱼 鱼群刷新时间为 1hour
+      [13422] = 5400, -- 石鳞鳗 鱼群刷新时间为 1.5hour
+    },
     ids = {
       [6358] = true, -- 黑口鱼
       [6359] = true, -- 火鳞鳝鱼
@@ -334,7 +340,7 @@ function HamsterGather:updateResDB(resCat, data)
   table.insert(histories, {data.ts, data.map, data.x, data.y, data.resId, data.resCount, data.sender})
 
   local resCategoryData = self.db.profile.resources[resCat.abbr].data
-  -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name}, ...}}}
+  -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}}}
   resCategoryData[data.map] = resCategoryData[data.map] or {}
   resCategoryData[data.map][data.resId] = resCategoryData[data.map][data.resId] or {show=true, respawns={}}
   local mapResRespawns = resCategoryData[data.map][data.resId].respawns
@@ -345,13 +351,25 @@ function HamsterGather:updateResDB(resCat, data)
     respawn[3] = data.ts
     respawn[4] = data.sender
   else
-    table.insert(mapResRespawns, {data.x, data.y, data.ts, data.sender})
+    respawn = {data.x, data.y, data.ts, data.sender}
+    table.insert(mapResRespawns, respawn)
     respawnId = #mapResRespawns
   end
 
   self:markRespawnConflicts(resCat, mapResRespawns, data, respawnId)
 
+  respawn[6] = self:calcRespawnTime(resCat, data)
+
   self:updateMinimap()
+  if data.map == WorldMapFrame.mapID then
+    HGWorldMapDataProvider:RefreshAllData()
+  end
+end
+
+function HamsterGather:calcRespawnTime(resCat, newData)
+  local respawnSeconds = resCat.respawnSeconds or {default=900}
+  local incSeconds = respawnSeconds[newData.resId] or respawnSeconds['default']
+  return newData.ts + incSeconds
 end
 
 function HamsterGather:markRespawnConflicts(resCat, mapResRespawns, newData, newRespawnId)
@@ -396,7 +414,7 @@ function HamsterGather:markConflict(respawnCnt, conflicts, respawnId1, respawnId
     if line:sub(shift, shift) == '0' then
       line = string.sub(line, 1, shift - 1) .. '1' .. string.sub(line, shift + 1)
       self:Debug("mark conflict:", u, v)
-      self:Debug(conflicts[u], "->", line)
+      --self:Debug(conflicts[u], "->", line)
     end
     assert(u + #line == respawnCnt)
     conflicts[u] = line
@@ -752,22 +770,24 @@ function HGWorldMapDataProvider:RemoveAllData()
 	wipe(worldmapPins)
 end
 
-function HGWorldMapDataProvider:RefreshAllData(...)
+function HGWorldMapDataProvider:RefreshAllData()
 	self:RemoveAllData()
 
 	local mapId = WorldMapFrame.mapID
 	if not mapId then return end
 
+  local now = GetServerTime()
   local map = self:GetMap()
 	for resCat, resData in pairs(self.db.profile.resources) do
     -- check if player has resource category skill/profession
     if self.resCatsByProfAbbr[resCat].rank then
+      local respawnSeconds = 900
       local resInMap = resData.data[mapId]
-      -- [map_id] = { [herbal_id] = {show=true, respawns={x,y, gather_time, gather_char_name}, ...}}}}
+      -- [map_id] = { [herbal_id] = {show=true, respawns={{x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}}}}
       if resInMap then
         for resId, resShowData in pairs(resInMap) do
           if resShowData.show then
-            for _, respawn in ipairs(resShowData.respawns) do
+            for respawnId, respawn in ipairs(resShowData.respawns) do
               local pin = map:AcquirePin("HamsterGatherMapPinTemplate", respawn[1]/100.0, respawn[2]/100.0, resId)
               table.insert(worldmapPins, pin)
              	pin:SetAlpha(0.6)
@@ -775,6 +795,10 @@ function HGWorldMapDataProvider:RefreshAllData(...)
               pin.mapId = mapId
               pin.resId = resId
               pin.groupId = respawn[5]
+              if respawn[6] and now < respawn[6] then
+                local elapsed = now - respawn[3]
+                pin:StartCooldown(GetTime() - elapsed, respawnSeconds)
+              end
             end
           end
         end
@@ -801,6 +825,7 @@ function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
 	self.texture:SetTexture(iconPath)
 	self.texture:SetTexCoord(0, 1, 0, 1)
 	self.texture:SetVertexColor(1, 1, 1, 1)
+  self.cooldown:Hide()
 end
 
 function HamsterGatherWorldMapPinMixin:OnMouseEnter()
@@ -833,4 +858,13 @@ function HamsterGatherWorldMapPinMixin:OnMouseLeave()
   end
 
 	--GameTooltip:Hide()
+end
+
+function HamsterGatherWorldMapPinMixin:StartCooldown(startTime, duration)
+  if not self.cooldown then return end
+
+  self.cooldown:SetCooldown(startTime, duration)
+  self.cooldown:Show()
+  self.cooldown:SetHideCountdownNumbers(false)
+  self.cooldown:SetSwipeColor(0, 0, 0, 0.7)
 end

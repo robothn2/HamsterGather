@@ -8,5 +8,10 @@
 				</Texture>
 			</Layer>
 		</Layers>
+		<Frames>
+			<Cooldown parentKey="cooldown" inherits="CooldownFrameTemplate" setAllPoints="true">
+				<SwipeTexture file="Interface\HUD\UI-HUD-CoolDown-Swipe"/>
+			</Cooldown>
+		</Frames>
 	</Frame>
 </Ui>
