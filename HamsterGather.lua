@@ -30,7 +30,6 @@ local resourceCategories = {
     lootTimeout=2,        -- 采集资源的施法完成后，超时时间之外获取的战利品都会被忽略
     posShiftFacing=1,     -- 采集成功后玩家位置和资源点的距离，按玩家面对方向往前计算码数
     sameDistancePower2=1, -- 认定为同一刷新点的距离
-    conflictSeconds=500,  -- 两个资源点都采集到了资源，当采集时间间隔在此数值以内，视为组冲突，即：两者必定从属不同资源分组
     respawnSeconds={default=900},   -- 经过实际蹲点统计，枯叶草/火焰花的刷新时间约为 15min(900秒)
     ids = {
       [765] = true,  -- 银叶草
@@ -64,7 +63,6 @@ local resourceCategories = {
   {
     abbr="mine", profession=L["Mining"], spells={10248},
     lootTimeout=2, posShiftFacing=1, sameDistancePower2=1,
-    conflictSeconds=500,
     respawnSeconds={default=900},
     ids = {
       [2770] = true,  -- 铜矿石
@@ -383,7 +381,7 @@ function HamsterGather:markRespawnConflicts(resCat, mapResRespawns, newData, new
   allConflicts[newData.map][newData.resId] = allConflicts[newData.map][newData.resId] or {}
   local conflicts = allConflicts[newData.map][newData.resId]
   
-  local timestampBegin = newData.ts - (resCat.conflictSeconds or 500)
+  local timestampBegin = newData.ts - math.floor(resCat.respawnSeconds.default * 0.8)
   local histories = self.db.profile.histories
   --self:Debug("Check history begin:", timestampBegin, #histories)
 
@@ -447,7 +445,7 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
     end
   end
 
-  local ROUND_MAX_GAP = resCat.conflictSeconds or 500    -- 冲突判定时间窗口
+  local ROUND_MAX_GAP = math.floor(resCat.respawnSeconds.default * 0.8)    -- 冲突判定时间窗口
   local resCategoryData = self.db.profile.resources[resCat.abbr].data
   if next(resCategoryData) == nil then return end
   if resCategoryData[mapId] == nil or resCategoryData[mapId][resId] == nil then return end
