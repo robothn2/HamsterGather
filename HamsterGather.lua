@@ -520,38 +520,6 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
     end
   end
 
-  -- 处理采集历史记录，根据时间间隔更新资源点分组互斥标记 respawns[respawnId A][respawnId B].conflict
-  local n = #histories
-  for i = 1, n do
-    for j = i + 1, n do
-      if (histories[j].ts - histories[i].ts) > ROUND_MAX_GAP then
-        break
-      end
-      local u, v = histories[i].id, histories[j].id
-      if u ~= v then
-        if u == nil or v == nil then
-          self:Debug(string.format("%d(%d) %d(%d)", i, histories[i].ts, j, histories[j].ts), u, v)
-        end
-        if u > v then u,v = v,u end -- respawns 表是有下标顺序要求的，小的在前
-        if not respawns[u][v].conflict then
-          respawns[u][v].conflict = true
-          self:Debug("mark conflict:", u, v)
-        end
-      end
-    end
-  end
-
-  -- 持久化冲突矩阵
-  for respawnId1, others in pairs(respawns) do
-    local slice = {unpack(others, respawnId1 + 1, #respawns)} -- 注意 others 还有 x, y, cornerDistances 等属性
-    local conflictLine = {}
-    for i, item in ipairs(slice) do
-      conflictLine[i] = item.conflict and "1" or "0"
-    end
-    persistConflicts[respawnId1] = table.concat(conflictLine)
-    --self:Debug(respawnId1, persistConflicts[respawnId1])
-  end
-
   -- 辅助函数：检查资源节点是否与当前组 groupMembers 中的任何节点冲突
   local function hasConflictWithGroup(respawnId, groupMembers)
     for _, memberId in ipairs(groupMembers) do
@@ -574,7 +542,7 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
   
   -- 按地图4个角的顺序选择一个角，选择最接近当前角的一个未分配组的资源点
   -- 以灼热平原的火焰花为例，正上方只有一个资源组，且经常被卡在一个无法采集的点，一般从左上角逆时针或者右上角顺时针采集，所以选取角的顺序要跟着地图走
-  local corners = {'topleft', 'bottomleft', 'bottomright', 'bottomright'}
+  local corners = {'topright', 'bottomright', 'bottomleft', 'topleft'}
   local function getCornerRespawn(unassignedRespawns, corner)
     if #unassignedRespawns == 0 then return nil end
     local res = {}
