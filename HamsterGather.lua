@@ -113,8 +113,9 @@ function HamsterGather:OnInitialize()
       histories = {},       -- 采集历史数据，格式：{mapId, x, y, resId, resCount, gatherTime, gatherCharName}
       historyMaxCount = 100,-- 保留的采集历史记录最大条数，超过时会移除前面的记录
       groupResources = { -- 分组计算资源设置
-        [13465] = {[1423]=true},-- 山鼠草 - 东瘟疫之地
-        [13466] = {[1423]=true},-- 瘟疫花 - 东瘟疫之地
+        [13463] = {},-- 梦叶草 - 所有区域
+        [13465] = {},-- 山鼠草 - 所有区域
+        [13466] = {},-- 瘟疫花 - 所有区域
         [4625] = {[1427]=true}, -- 火焰花 - 灼热峡谷
         [3369] = {[1431]=true}, -- 墓地苔 - 暮色森林
         [3818] = {}, -- 枯叶草 - 所有区域
@@ -664,6 +665,7 @@ function HamsterGather:updateMinimap()
 	local frameLevel = Minimap:GetFrameLevel() + 5
 	local frameStrata = Minimap:GetFrameStrata()
 
+  local now = GetServerTime()
   for resCat, resData in pairs(self.db.profile.resources) do
     -- check if player has resource category skill/profession
     if self.resCatsByProfAbbr[resCat].rank then
@@ -678,12 +680,19 @@ function HamsterGather:updateMinimap()
                 pin:SetFrameStrata(frameStrata)
                 pin:SetFrameLevel(frameLevel)
                 pin:SetAlpha(0.6)
-                pin:SetWidth(12)
-                pin:SetHeight(12)
+                pin:SetWidth(14)
+                pin:SetHeight(14)
                 local t = pin.texture
                 t:SetTexture(string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId))
                 t:SetTexCoord(0, 1, 0, 1)
                 t:SetAllPoints(pin)
+                if respawn[6] and now < respawn[6] then
+                  local elapsed = now - respawn[3]
+                  pin.cooldown:SetCooldown(GetTime() - elapsed, respawn[6] - respawn[3])
+                  pin.cooldown:Show()
+                else
+                  pin.cooldown:Hide()
+                end
                 --pin:SetScript("OnClick", nil)
                 self.HBDPins:AddMinimapIconMap("HamsterGatherMiniPin", pin, mapId, respawn[1]/100.0, respawn[2]/100.0, false, false)
                 self.minimapPins[pin] = pin
@@ -716,6 +725,12 @@ function HamsterGather:getNewPin()
 	  texture:SetTexelSnappingBias(0)
 	  texture:SetSnapToPixelGrid(false)
     texture:SetAllPoints(pin)
+    local cooldown = CreateFrame("Cooldown", nil, pin, "CooldownFrameTemplate")
+    pin.cooldown = cooldown
+    cooldown:SetAllPoints(pin)
+    cooldown:SetSwipeTexture([[Interface\HUD\UI-HUD-CoolDown-Swipe]])
+    cooldown:SetHideCountdownNumbers(false)
+    cooldown:SetSwipeColor(0, 0, 0, 0.7)
     pin:EnableMouse(false)
     --[[
     pin:RegisterForClicks("LeftButtonUp", "RightButtonUp");
