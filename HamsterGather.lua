@@ -30,7 +30,7 @@ local resourceCategories = {
     lootTimeout=2,        -- 采集资源的施法完成后，超时时间之外获取的战利品都会被忽略
     posShiftFacing=1,     -- 采集成功后玩家位置和资源点的距离，按玩家面对方向往前计算码数
     sameDistancePower2=1, -- 认定为同一刷新点的距离
-    respawnSeconds={default=900},   -- 经过实际蹲点统计，枯叶草/火焰花的刷新时间约为 15min(900秒)
+    respawnSeconds={default=900},   -- 经过实际统计，枯叶草/火焰花/墓地苔的刷新时间约为 12-15min
     ids = {
       [765] = true,  -- 银叶草
       [785] = true,  -- 魔皇草
@@ -116,6 +116,7 @@ function HamsterGather:OnInitialize()
         [13463] = {},-- 梦叶草 - 所有区域
         [13465] = {},-- 山鼠草 - 所有区域
         [13466] = {},-- 瘟疫花 - 所有区域
+        [8846] = {},-- 格罗姆之血 - 所有区域
         [4625] = {[1427]=true}, -- 火焰花 - 灼热峡谷
         [3369] = {[1431]=true}, -- 墓地苔 - 暮色森林
         [3818] = {}, -- 枯叶草 - 所有区域
@@ -600,6 +601,9 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
   end
 
   -- 更新 respawns 内的各资源点的组 ID，并刷新 world map
+  for _, respawn in ipairs(mapResRespawns) do
+    respawn[5] = nil
+  end
   for groupId, group in ipairs(groups) do
     for _, respawnId in ipairs(group) do
       mapResRespawns[respawnId][5] = groupId
@@ -778,7 +782,8 @@ function HGWorldMapDataProvider:RefreshAllData()
               pin.groupId = respawn[5]
               if respawn[6] and now < respawn[6] then
                 local elapsed = now - respawn[3]
-                pin:StartCooldown(GetTime() - elapsed, respawnSeconds)
+                pin.cooldown:SetCooldown(GetTime() - elapsed, respawn[6] - respawn[3])
+                pin.cooldown:Show()
               end
             end
           end
@@ -807,6 +812,8 @@ function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
 	self.texture:SetTexCoord(0, 1, 0, 1)
 	self.texture:SetVertexColor(1, 1, 1, 1)
   self.cooldown:Hide()
+  self.cooldown:SetHideCountdownNumbers(false)
+  self.cooldown:SetSwipeColor(0, 0, 0, 0.7)
 end
 
 function HamsterGatherWorldMapPinMixin:OnMouseEnter()
@@ -815,6 +822,8 @@ function HamsterGatherWorldMapPinMixin:OnMouseEnter()
   local cnt = 0
   for _, pin in ipairs(worldmapPins) do
     if pin.resId == self.resId and pin.groupId == self.groupId then
+      pin:SetHeight(15)
+	    pin:SetWidth(15)
       pin:SetAlpha(1.0)
       cnt = cnt + 1
     end
@@ -836,16 +845,9 @@ end
 function HamsterGatherWorldMapPinMixin:OnMouseLeave()
   for _, pin in ipairs(worldmapPins) do
     pin:SetAlpha(0.6)
+    pin:SetHeight(12)
+    pin:SetWidth(12)
   end
 
 	--GameTooltip:Hide()
-end
-
-function HamsterGatherWorldMapPinMixin:StartCooldown(startTime, duration)
-  if not self.cooldown then return end
-
-  self.cooldown:SetCooldown(startTime, duration)
-  self.cooldown:Show()
-  self.cooldown:SetHideCountdownNumbers(false)
-  self.cooldown:SetSwipeColor(0, 0, 0, 0.7)
 end
