@@ -87,6 +87,9 @@ local resourceCategories = {
       [6358] = true, -- 黑口鱼
       [6359] = true, -- 火鳞鳝鱼
       [13422] = true, -- 石鳞鳗
+      [7080] = true, -- 水之精华
+      [7079] = true, -- 纯水之球
+      [7070] = true, -- 元素之水
     },
   },
 }
