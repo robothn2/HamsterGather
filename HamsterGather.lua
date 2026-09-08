@@ -44,6 +44,7 @@ local resourceCategories = {
       [3358] = true, -- 卡德加的胡须
       [3369] = true, -- 墓地苔
       [3818] = true, -- 枯叶草
+      [3819] = true, -- 冬刺草
       [3820] = true, -- 荆棘藻
       [3821] = true, -- 金棘草
       [4625] = true, -- 火焰花
@@ -57,6 +58,7 @@ local resourceCategories = {
       [13464] = true, -- 黄金参
       [13465] = true, -- 山鼠草
       [13466] = true, -- 瘟疫花
+      [13467] = true, -- 冰盖草
       [13468] = true, -- 黑莲花
     },
   },
