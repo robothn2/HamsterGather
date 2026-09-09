@@ -320,7 +320,7 @@ function HamsterGather:sendResourceGatherToOthers(data)
   -- /dump IsInGroup(),IsInRaid()
   if not IsInGroup() then return end
   local channel = IsInRaid() and "RAID" or "PARTY"
-  local msg = self:Serialize({action='sync_gather', data=data})
+  local msg = self:Serialize({action='sync_gather', sender=self.playerFullName, data=data})
   -- priority: "ALERT", "NORMAL", "BULK"
   self:SendCommMessage(HG_PREFIX, msg, channel, nil, "NORMAL")
 end
