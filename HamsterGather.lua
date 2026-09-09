@@ -127,7 +127,6 @@ function HamsterGather:OnInitialize()
         [3818] = {}, -- 枯叶草 - 所有区域
       },
       persistGroupConflicts = {}, -- 持久化存储分组计算的冲突矩阵，格式：{[mapId] = {[resId] = {[respawnId1] = {[respawnId2] = true, ...}, ...}}}
-      historyProcessedTs = 0,  -- 上次分组计算时已经处理的历史数据的最新时间戳
     },
   }
   for _, res in ipairs(resourceCategories) do
@@ -180,7 +179,7 @@ function HamsterGather:OnEnable()
     end
   end
 
-  self:Print(L["HamsterGather"], "loaded.")
+  self:Print("loaded.")
 end
 
 function HamsterGather:OnDisable()
@@ -503,24 +502,6 @@ function HamsterGather:ComputeGroupsInternal(mapId, resId)
   if next(resCategoryData) == nil then return end
   if resCategoryData[mapId] == nil or resCategoryData[mapId][resId] == nil then return end
   local mapResRespawns = resCategoryData[mapId][resId].respawns
-  local historyProcessedTs = self.db.profile.historyProcessedTs
-  local histories = {}
-  for _, r in ipairs(self.db.profile.histories) do
-    -- {now, mapId, x, y, resId, resCount, self.playerName}
-    if historyProcessedTs < r[1] then -- 忽略上次计算分组时已经处理的数据
-      if r[2] == mapId and r[5] == resId then
-        local respawn, respawnId = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
-        if respawn ~= nil then -- 有可能不存在
-          table.insert(histories, {ts = r[1], id = respawnId})
-        end
-      end
-    end
-  end
-  if #histories == 0 then return end
-  self:Debug(string.format("Map(%d) res(%d) has %d new records", mapId, resId, #histories))
-
-  -- 按时间顺序排序采集记录
-  table.sort(histories, function(a, b) return a.ts < b.ts end)
 
   -- 计算两资源点间的二维欧氏距离平方
   local function calcRespawnDistance(r1, r2)
@@ -666,7 +647,6 @@ end
 
 function HamsterGather:ComputeAllGroups()
   local ret = {}
-  local historyProcessedTs = self.db.profile.historyProcessedTs
   -- 历史数据的分组计算
   if self.db.profile.groupResources then
     for resId, mapIds in pairs(self.db.profile.groupResources) do
@@ -678,10 +658,7 @@ function HamsterGather:ComputeAllGroups()
       end
     end
   end
-  -- 更新历史数据已处理时间戳
-  self.db.profile.historyProcessedTs = GetServerTime()
-  self:Print(string.format("History processed timestamp: %d -> %d", historyProcessedTs, self.db.profile.historyProcessedTs))
-  
+
   HGWorldMapDataProvider:RefreshAllData()
   return ret
 end
