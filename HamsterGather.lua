@@ -148,6 +148,7 @@ function HamsterGather:OnEnable()
   -- Do more initialization here, that really enables the use of your addon.
   -- Register Events, Hook functions, Create Frames, Get information from the game that wasn't available in OnInitialize
   self.playerName, self.playerRealm = UnitFullName("player")
+  self.playerFullName = string.format('%s-%s', self.playerName, self.playerRealm)
   self.current = { spellId=nil, resCat=nil }
   for _, event in ipairs(registerEvents) do
     self:RegisterEvent(event, "OnEvent")
@@ -291,6 +292,7 @@ function HamsterGather:OnEvent(event, ...)
 
     self:updateResDB(resCat, data)
     self:sendResourceGatherToOthers(data)
+    self:updateMaps(data.map)
   elseif event == "ZONE_CHANGED_NEW_AREA" then
     self:updateMinimap()
   end
@@ -307,42 +309,84 @@ function HamsterGather:resetLootTimer(resCat)
   end)
 end
 
+function HamsterGather:updateMaps(mapId)
+  self:updateMinimap()
+  if mapId == WorldMapFrame.mapID then
+    HGWorldMapDataProvider:RefreshAllData()
+  end
+end
+
 function HamsterGather:sendResourceGatherToOthers(data)
   -- /dump IsInGroup(),IsInRaid()
   if not IsInGroup() then return end
   local channel = IsInRaid() and "RAID" or "PARTY"
-  local msg = self:Serialize(data)
+  local msg = self:Serialize({action='sync_gather', data=data})
   -- priority: "ALERT", "NORMAL", "BULK"
   self:SendCommMessage(HG_PREFIX, msg, channel, nil, "NORMAL")
+end
+
+function HamsterGather:sendRespawnsToOthers(resCatAbbr, mapId)
+  -- 将资源点列表发送给他人
+  if not IsInGroup() then return end
+  local channel = IsInRaid() and "RAID" or "PARTY"
+  local respawns = {}
+  local resCatData = self.db.profile.resources[resCatAbbr].data
+  if resCatData[mapId] then
+    for resId, resData in pairs(resCatData[mapId]) do
+      -- {x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}
+      for _, respawn in ipairs(resData.respawns) do
+        table.insert(respawns, {
+          x=respawn[1], y=respawn[2], ts=respawn[3], sender=respawn[4], respawnTime=respawn[6],
+          cat=resCatAbbr, map=mapId, resId=resId, resCount=1
+        })
+      end
+    end
+  end
+  local data = {action='sync_respawns', sender=self.playerFullName, data={cat=resCatAbbr, map=mapId, respawns=respawns}}
+  local msg = self:Serialize(data)
+  self:SendCommMessage(HG_PREFIX, msg, channel, nil, "BULK")
 end
 
 function HamsterGather:OnCommReceived(prefix, message, channel, sender)
   -- self:Debug(sender, message)
   if prefix ~= HG_PREFIX or sender == self.playerName then return end
-  local success, data = self:Deserialize(message)
-  if success then
-    self:Debug(data.ts, data.sender, data.cat, data.resId, data.resCount, data.map, data.x, data.y)
+  local success, d = self:Deserialize(message)
+  if not success then return end
+  if d.action == 'sync_gather' then
+    local data = d.data
+    self:Debug(string.format("From %s: gather %s[%d x %d] under map %d", d.sender, data.cat, data.resId, data.resCount, data.map))
     local resCat = self.resCatsByProfAbbr[data.cat]
     self:updateResDB(resCat, data)
+    self:updateMaps(data.map)
+  elseif d.action == 'sync_respawns' then
+    local data = d.data
+    self:Print(string.format("From %s: received %s[%d] respawns under map %d", d.sender, data.cat, #data.respawns, data.map))
+    local resCat = self.resCatsByProfAbbr[data.cat]
+    for _, respawn in ipairs(data.respawns) do
+      self:updateResDB(resCat, respawn, true) -- noHistory 为 true 时不计入历史记录
+    end
+    self:updateMaps(data.map)
   end
 end
 
-function HamsterGather:updateResDB(resCat, data)
+function HamsterGather:updateResDB(resCat, data, noHistory)
   -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
   if not resCat or not resCat.ids[data.resId] then return end
 
-  local histories = self.db.profile.histories
-  -- 当捡取可堆叠资源时，如果加上捡取的资源会超过整组，会被拆分为两条消息，这里把它们合并为一条
-  -- 例如：堆叠数当前为 18，最大 20，捡取3个时会拆分成 2 和 1 两条
-  local prevHistory = histories[#histories]
-  if prevHistory then
-    if data.ts == prevHistory[1] and data.resId == prevHistory[5] then
-      self:Debug("Combined history", data.resId, prevHistory[6], "->", prevHistory[6] + data.resCount)
-      prevHistory[6] = prevHistory[6] + data.resCount
+  if not noHistory then
+    local histories = self.db.profile.histories
+    -- 当捡取可堆叠资源时，如果加上捡取的资源会超过整组，会被拆分为两条消息，这里把它们合并为一条
+    -- 例如：堆叠数当前为 18，最大 20，捡取3个时会拆分成 2 和 1 两条
+    local prevHistory = histories[#histories]
+    if prevHistory then
+      if data.ts == prevHistory[1] and data.resId == prevHistory[5] and data.x == prevHistory[3] and data.y == prevHistory[4] then
+        self:Debug("Combined history", data.resId, prevHistory[6], "->", prevHistory[6] + data.resCount)
+        prevHistory[6] = prevHistory[6] + data.resCount
+      end
     end
+    -- 增加采集历史记录
+    table.insert(histories, {data.ts, data.map, data.x, data.y, data.resId, data.resCount, data.sender})
   end
-  -- 增加采集历史记录
-  table.insert(histories, {data.ts, data.map, data.x, data.y, data.resId, data.resCount, data.sender})
 
   local resCategoryData = self.db.profile.resources[resCat.abbr].data
   -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}}}
@@ -363,11 +407,13 @@ function HamsterGather:updateResDB(resCat, data)
 
   self:markRespawnConflicts(resCat, mapResRespawns, data, respawnId)
 
-  respawn[6] = self:calcRespawnTime(resCat, data)
-
-  self:updateMinimap()
-  if data.map == WorldMapFrame.mapID then
-    HGWorldMapDataProvider:RefreshAllData()
+  if not data.respawnTime then
+    respawn[6] = self:calcRespawnTime(resCat, data)
+  else
+    -- 如果数据内已经有了刷新时间，当比自己大时直接使用
+    if respawn[6] == nil or respawn[6] < data.respawnTime then
+      respawn[6] = data.respawnTime
+    end
   end
 end
 
@@ -657,6 +703,10 @@ function HamsterGather:HandleSlash(msg)
         self:Print("Group", i, ": {", table.concat(group, ","), "}")
       end
     end
+  elseif cmd == "sync" then
+    local mapId = C_Map.GetBestMapForUnit("player")
+    local catAbbr = rest
+    self:sendRespawnsToOthers(catAbbr, mapId)
   else
     self:Print("Unknown command:", msg)
   end
