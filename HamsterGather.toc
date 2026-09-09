@@ -1,18 +1,18 @@
 ## Interface: 11509
-## Notes: Collects Herbals, Mines and Fishing locations and show them in the worldmap and minimap
-## Notes-zhCN: 收集草药、矿等资源位置，显示于世界地图和小地图。
+## Notes: Collects Herbals, Mines and Fishing locations and show them in the worldmap and minimap, show cooldown timer after resource gathered.
+## Notes-zhCN: 收集草药、矿、鱼群等资源位置，显示于世界地图和小地图，采集后显示刷新倒计时。
 ## Title: HamsterGather
 ## Title-zhCN: 仓鼠资源采集
 ## Author: robothn
 ## X-Email: 1815156@qq.com
 ## X-Category: Map
 ## Group: HamsterGather
-## Version: 0.0.1-classic
+## Version: 0.1.0-classic
 ## X-License: GPL-3.0
 ## OptionalDeps: Ace3
 ## LoadManagers: AddonLoader
 ## X-LoadOn-Always: delayed
-## IconTexture: Interface\AddOns\HamsterGather\Assets\logo.tga
+## IconTexture: Interface\AddOns\HamsterGather\Assets\hamster.tga
 ## SavedVariables: HamsterGatherDB
 
 Libs\LibStub\LibStub.lua
@@ -31,7 +31,7 @@ Libs\HereBeDragons\HereBeDragons-2.0.lua
 Libs\HereBeDragons\HereBeDragons-Pins-2.0.lua
 Libs\HereBeDragons\HereBeDragons-Migrate.lua
 
-#Locales\HamsterGather-enUS.lua
+Locales\HamsterGather-enUS.lua
 Locales\HamsterGather-zhCN.lua
 
 ## load in order
