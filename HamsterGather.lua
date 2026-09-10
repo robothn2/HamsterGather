@@ -229,7 +229,7 @@ function HamsterGather:Debug(...)
   end
 end
 
--- get player info
+-- get player profession info
 function HamsterGather:SKILL_LINES_CHANGED()
   -- cleanup
   for _, cat in pairs(self.resCatsByProfAbbr) do
@@ -410,22 +410,32 @@ function HamsterGather:sendRespawnsToOthers(resCatAbbr, mapId)
   -- 将资源点列表发送给他人
   if not IsInGroup() then return end
   local channel = IsInRaid() and "RAID" or "PARTY"
-  local respawns = {}
+  local respawnsToSend = {}
   local resCatData = self.db.profile.resources[resCatAbbr].data
   if resCatData[mapId] then
     for resId, resData in pairs(resCatData[mapId]) do
-      -- {x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}
+      -- {x,y, gather_time, gather_char_name, group_id, respawn_time, alter_id}, ...}
       for _, respawn in ipairs(resData.respawns) do
-        table.insert(respawns, {
-          x=respawn[1], y=respawn[2], ts=respawn[3], sender=respawn[4], respawnTime=respawn[6], alterId=respawn[7],
-          cat=resCatAbbr, map=mapId, resId=resId, resCount=1
+        table.insert(respawnsToSend, {
+          x=respawn[1], y=respawn[2], ts=respawn[3], sender=respawn[4], respawnTime=respawn[6],
+          interactive=self:alterIdToInteractive(resCatAbbr, respawn[7]),
+          cat=resCatAbbr, map=mapId, resId=respawn[7] or resId, resCount=1
         })
       end
     end
   end
-  local data = {action='sync_respawns', sender=self.playerFullName, data={cat=resCatAbbr, map=mapId, respawns=respawns}}
+  local data = {action='sync_respawns', sender=self.playerFullName, data={cat=resCatAbbr, map=mapId, respawns=respawnsToSend}}
   local msg = self:Serialize(data)
   self:SendCommMessage(HG_PREFIX, msg, channel, nil, "BULK")
+end
+
+function HamsterGather:alterIdToInteractive(resCatAbbr, alterId)
+  local resCat = self.resCatsByProfAbbr[resCatAbbr]
+  for name, detail in pairs(resCat.interactives) do
+    if detail.alterId == alterId then
+      return name
+    end
+  end
 end
 
 function HamsterGather:OnCommReceived(prefix, message, channel, sender)
@@ -441,7 +451,7 @@ function HamsterGather:OnCommReceived(prefix, message, channel, sender)
     self:updateMaps(data.map)
   elseif d.action == 'sync_respawns' then
     local data = d.data
-    self:Print(string.format("From %s: received %s[%d] respawns under map %d", d.sender, data.cat, #data.respawns, data.map))
+    self:Print(string.format("From %s: received %s[%d] respawns in map[%d]", d.sender, data.cat, #data.respawns, data.map))
     local resCat = self.resCatsByProfAbbr[data.cat]
     for _, respawn in ipairs(data.respawns) do
       self:updateResDB(resCat, respawn, true)
@@ -451,7 +461,7 @@ function HamsterGather:OnCommReceived(prefix, message, channel, sender)
 end
 
 function HamsterGather:updateResDB(resCat, data, noHistory)
-  -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头、钓鱼宝箱
+  -- 仅支持固定的资源 id，忽略伴生草药、挖矿石头
   if not resCat or not resCat.ids[data.resId] then return end
 
   if not noHistory then
@@ -803,6 +813,7 @@ function HamsterGather:updateMinimap()
                 pin:SetHeight(14)
                 local t = pin.texture
                 t:SetTexture(string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", respawn[7] or resId))
+                --t:SetTexture(C_Item.GetItemIconByID(respawn[7] or resId))
                 t:SetTexCoord(0, 1, 0, 1)
                 t:SetAllPoints(pin)
                 if respawn[6] and now < respawn[6] then
