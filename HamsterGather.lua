@@ -81,24 +81,39 @@ local resourceCategories = {
   },
   {
     abbr="fish", profession=L["Fishing"], spells={18248},
-    lootTimeout=2, posShiftFacing=15, sameDistancePower2=1,
+    lootTimeout=2, posShiftFacing=15, sameDistancePower2=0.5,
     ids = {
+      [3820] = true, -- 荆棘藻
       [6358] = true, -- 黑口鱼
       [6359] = true, -- 火鳞鳝鱼
       [13422] = true, -- 石鳞鳗
-      [7080] = true, -- 水之精华
-      [7079] = true, -- 纯水之球
+
       [7070] = true, -- 元素之水
-      [3820] = true, -- 荆棘藻
+      [7079] = true, -- 纯水之球
+      [7080] = true, -- 水之精华
+
+      [20709] = true, -- 光明美味朗姆酒
+      [21114] = true, -- 黑暗美味朗姆酒
       [21151] = true, -- 黑标美味朗姆酒
+
+      [21150] = true, -- 铁箍箱
       [21228] = true, -- 秘银箱
+      [13874] = true, -- 沉重的箱子
+      [13875] = true, -- 锁住的铁箍箱
+      [13918] = true, -- 加固的宝箱
+      [20708] = true, -- 紧紧封起来的箱子
+      [6351] = true, -- 被挤压过的箱子
+      [6353] = true, -- 小箱子
+      [6355] = true, -- 结实的宝箱
+      [6357] = true, -- 密封的箱子
     },
     interactives = {
       [L['Oily Blackmouth School']]   = {respawnSeconds=3600, alterId=6358, default=true}, -- 黑口鱼群，未能识别的鱼群被认定为此鱼群
       [L["Floating Wreckage"]]        = {respawnSeconds=1800, alterId=21228}, -- 漂浮的残骸
-      [L["Firefin Snapper School"]]   = {respawnSeconds=3600, alterId=6359},-- 火鳞鳝鱼群
+      [L["Floating Debris"]]          = {respawnSeconds=1800, alterId=21228}, -- 漂浮的碎片
+      [L["Firefin Snapper School"]]   = {respawnSeconds=3600, alterId=6359},  -- 火鳞鳝鱼群
       [L["Stonescale Eel Swarm"]]     = {respawnSeconds=5400, alterId=13422}, -- 石鳞鳗群
-      [L["Patch of Elemental Water"]] = {respawnSeconds=1800, alterId=7070}, -- 元素之水
+      [L["Patch of Elemental Water"]] = {respawnSeconds=1800, alterId=7070},  -- 元素之水
     },
   },
 }
