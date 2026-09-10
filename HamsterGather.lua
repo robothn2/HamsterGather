@@ -391,7 +391,9 @@ function HamsterGather:resetLootTimer(resCat)
 end
 
 function HamsterGather:updateMaps(mapId)
-  self:updateMinimap()
+  if mapId == C_Map.GetBestMapForUnit("player") then
+    self:updateMinimap()
+  end
   if mapId == WorldMapFrame.mapID then
     HGWorldMapDataProvider:RefreshAllData()
   end
