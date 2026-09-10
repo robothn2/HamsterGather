@@ -8,9 +8,10 @@ local L = LibStub("AceLocale-3.0"):GetLocale("HamsterGather", false)
 local HG_PREFIX = "HamsterGather" -- addon 消息前缀
 -- all register events list below  
 local registerEvents = {
-  --"UNIT_SPELLCAST_START",
+  "CURSOR_CHANGED",
   --"UNIT_SPELLCAST_CHANNEL_START",
   "UNIT_SPELLCAST_CHANNEL_STOP",
+  --"UNIT_SPELLCAST_START",
   --"UNIT_SPELLCAST_FAILED",
   --"UNIT_SPELLCAST_INTERRUPTED",
   "UNIT_SPELLCAST_SUCCEEDED",
@@ -81,10 +82,6 @@ local resourceCategories = {
   {
     abbr="fish", profession=L["Fishing"], spells={18248},
     lootTimeout=2, posShiftFacing=15, sameDistancePower2=1,
-    respawnSeconds={
-      default = 3600, -- 黑口鱼/火鳞鳝鱼 鱼群刷新时间为 1hour
-      [13422] = 5400, -- 石鳞鳗 鱼群刷新时间为 1.5hour
-    },
     ids = {
       [6358] = true, -- 黑口鱼
       [6359] = true, -- 火鳞鳝鱼
@@ -92,6 +89,16 @@ local resourceCategories = {
       [7080] = true, -- 水之精华
       [7079] = true, -- 纯水之球
       [7070] = true, -- 元素之水
+      [3820] = true, -- 荆棘藻
+      [21151] = true, -- 黑标美味朗姆酒
+      [21228] = true, -- 秘银箱
+    },
+    interactives = {
+      [L['Oily Blackmouth School']]   = {respawnSeconds=3600, alterId=6358, default=true}, -- 黑口鱼群，未能识别的鱼群被认定为此鱼群
+      [L["Floating Wreckage"]]        = {respawnSeconds=1800, alterId=21228}, -- 漂浮的残骸
+      [L["Firefin Snapper School"]]   = {respawnSeconds=3600, alterId=6359},-- 火鳞鳝鱼群
+      [L["Stonescale Eel Swarm"]]     = {respawnSeconds=5400, alterId=13422}, -- 石鳞鳗群
+      [L["Patch of Elemental Water"]] = {respawnSeconds=1800, alterId=7070}, -- 元素之水
     },
   },
 }
@@ -148,7 +155,7 @@ function HamsterGather:OnEnable()
   -- Register Events, Hook functions, Create Frames, Get information from the game that wasn't available in OnInitialize
   self.playerName, self.playerRealm = UnitFullName("player")
   self.playerFullName = string.format('%s-%s', self.playerName, self.playerRealm)
-  self.current = { spellId=nil, resCat=nil }
+  self.current = { spellId=nil, resCat=nil, interactives={} }
   for _, event in ipairs(registerEvents) do
     self:RegisterEvent(event, "OnEvent")
   end
@@ -254,13 +261,35 @@ function HamsterGather:getPosFrontOfPlayerFacing(distanceYard)
 end
 
 function HamsterGather:OnEvent(event, ...)
-	--self:Debug(event, ...)
-  if event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
-    -- reset loot timer after message for fishing
+  if event == "CURSOR_CHANGED" then
+    -- 通道施法过程中，CURSOR_CHANGED 才会频繁触发，这里是为钓鱼这种通道施法所用
+    -- 在通道施法时检查法术ID，如果是关注的法术，就收集交互目标的名称
+    local spellId = select(8, UnitChannelInfo("player"))
+    if spellId then
+      local resCat = self.resCatsBySpellId[spellId]
+      if resCat then
+        local target = GameTooltipTextLeft1:GetText()
+        if target then
+          self.current.interactives[target] = GetServerTime()
+        end
+      end
+    end
+  elseif event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
     local caster, _, spellId = ...
     if caster ~= 'player' then return end
     local resCat = self.resCatsBySpellId[spellId]
     if not resCat then return end
+    -- 施法成功后，清除 60 秒前的所有交互目标
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+      local oldest = GetServerTime() - 60
+      local interactives = self.current.interactives
+      for k, ts in pairs(interactives) do
+        if ts < oldest then
+          interactives[k] = nil
+        end
+      end
+    end
+    -- 施法成功/通道施法终止时开始记录战利品
     self.current.resCat = resCat
     self.current.spellId = spellId
     self:resetLootTimer(resCat)
@@ -284,10 +313,11 @@ function HamsterGather:OnEvent(event, ...)
     local x, y, mapId = self:getPosFrontOfPlayerFacing(resCat.posShiftFacing)
     local data = {
       ts = GetServerTime(), sender = self.playerName, resId = tonumber(itemId), resCount = count, cat = resCat.abbr,
+      interactive = self:getInteractiveSource(resCat),
       -- 返回的 x,y 是归一化坐标，需要乘 100，保留 2 位小数，最后一位小数四舍五入
       map = mapId, x = math.floor(x * 10000 + 0.5) / 100, y = math.floor(y * 10000 + 0.5) / 100,
     }
-    self:Debug(data.ts, data.sender, data.cat, data.resId, data.resCount, data.map, data.x, data.y)
+    self:Debug(data.ts, data.sender, data.cat, data.interactive, data.resId, data.resCount, data.map, data.x, data.y)
 
     self:updateResDB(resCat, data)
     self:sendResourceGatherToOthers(data)
@@ -295,6 +325,43 @@ function HamsterGather:OnEvent(event, ...)
   elseif event == "ZONE_CHANGED_NEW_AREA" then
     self:updateMinimap()
   end
+end
+
+function HamsterGather:getInteractiveSource(resCat)
+  if not resCat.interactives then return end
+
+  -- 获取玩家施法成功后最晚的鼠标可交互目标名称
+  local interactives = {}
+  for name, ts in pairs(self.current.interactives) do
+    if resCat.interactives[name] then
+      table.insert(interactives, {name=name, ts=ts})
+    end
+  end
+  if #interactives > 0 then
+    table.sort(interactives, function(a, b) return a.ts > b.ts end)
+    return interactives[1].name
+  end
+
+  -- 没有获取到有效的可交互目标时，使用缺省项
+  for name, detail in pairs(resCat.interactives) do
+    if detail.default then
+      return name
+    end
+  end
+end
+
+function HamsterGather:ensureRespawns(resCat, newData)
+  local resCategoryData = self.db.profile.resources[resCat.abbr].data
+  -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name, group_id, respawn_time, alter_id}, ...}}}
+  resCategoryData[newData.map] = resCategoryData[newData.map] or {}
+  local resKey = (newData.interactive ~= nil) and 'interactive' or newData.resId
+  resCategoryData[newData.map][resKey] = resCategoryData[newData.map][resKey] or {show=true, respawns={}}
+  -- 数据内有可交互目标的(newData.interactive)，使用可交互目标提供的图标 ID
+  local alterId = nil 
+  if newData.interactive then
+    alterId = resCat.interactives[newData.interactive].alterId
+  end
+  return resCategoryData[newData.map][resKey].respawns, alterId
 end
 
 function HamsterGather:resetLootTimer(resCat)
@@ -335,7 +402,7 @@ function HamsterGather:sendRespawnsToOthers(resCatAbbr, mapId)
       -- {x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}
       for _, respawn in ipairs(resData.respawns) do
         table.insert(respawns, {
-          x=respawn[1], y=respawn[2], ts=respawn[3], sender=respawn[4], respawnTime=respawn[6],
+          x=respawn[1], y=respawn[2], ts=respawn[3], sender=respawn[4], respawnTime=respawn[6], alterId=respawn[7],
           cat=resCatAbbr, map=mapId, resId=resId, resCount=1
         })
       end
@@ -353,16 +420,16 @@ function HamsterGather:OnCommReceived(prefix, message, channel, sender)
   if not success then return end
   if d.action == 'sync_gather' then
     local data = d.data
-    self:Debug(string.format("From %s: gather %s[%d x %d] under map %d", d.sender, data.cat, data.resId, data.resCount, data.map))
+    self:Debug(string.format("From %s: gather %s[%d x %d] in map[%d]", d.sender, data.cat, data.resId, data.resCount, data.map), data.interactive)
     local resCat = self.resCatsByProfAbbr[data.cat]
-    self:updateResDB(resCat, data)
+    self:updateResDB(resCat, data, true) -- noHistory 为 true 时不计入历史记录
     self:updateMaps(data.map)
   elseif d.action == 'sync_respawns' then
     local data = d.data
     self:Print(string.format("From %s: received %s[%d] respawns under map %d", d.sender, data.cat, #data.respawns, data.map))
     local resCat = self.resCatsByProfAbbr[data.cat]
     for _, respawn in ipairs(data.respawns) do
-      self:updateResDB(resCat, respawn, true) -- noHistory 为 true 时不计入历史记录
+      self:updateResDB(resCat, respawn, true)
     end
     self:updateMaps(data.map)
   end
@@ -387,24 +454,20 @@ function HamsterGather:updateResDB(resCat, data, noHistory)
     table.insert(histories, {data.ts, data.map, data.x, data.y, data.resId, data.resCount, data.sender})
   end
 
-  local resCategoryData = self.db.profile.resources[resCat.abbr].data
-  -- [map_id] = { [herbal_id] = {{x,y, gather_time, gather_char_name, group_id, respawn_time}, ...}}}
-  resCategoryData[data.map] = resCategoryData[data.map] or {}
-  resCategoryData[data.map][data.resId] = resCategoryData[data.map][data.resId] or {show=true, respawns={}}
-  local mapResRespawns = resCategoryData[data.map][data.resId].respawns
-
-  -- 增加资源采集点(respawn)
-  local respawn, respawnId = self:FindRespawn(mapResRespawns, data.x, data.y, resCat)
+  local respawns, alterId = self:ensureRespawns(resCat, data)
+  -- 更新或增加资源采集点(respawn)
+  local respawn, respawnId = self:findRespawn(respawns, data.x, data.y, resCat)
   if respawn then
     respawn[3] = data.ts
     respawn[4] = data.sender
   else
     respawn = {data.x, data.y, data.ts, data.sender}
-    table.insert(mapResRespawns, respawn)
-    respawnId = #mapResRespawns
+    table.insert(respawns, respawn)
+    respawnId = #respawns
   end
+  respawn[7] = alterId
 
-  self:markRespawnConflicts(resCat, mapResRespawns, data, respawnId)
+  self:markRespawnConflicts(resCat, respawns, data, respawnId)
 
   if not data.respawnTime then
     respawn[6] = self:calcRespawnTime(resCat, data)
@@ -417,8 +480,13 @@ function HamsterGather:updateResDB(resCat, data, noHistory)
 end
 
 function HamsterGather:calcRespawnTime(resCat, newData)
-  local respawnSeconds = resCat.respawnSeconds or {default=900}
-  local incSeconds = respawnSeconds[newData.resId] or respawnSeconds['default']
+  local incSeconds
+  if newData.interactive and resCat.interactives then
+    incSeconds = resCat.interactives[newData.interactive].respawnSeconds
+  else
+    local respawnSeconds = resCat.respawnSeconds or {default=900}
+    incSeconds = respawnSeconds[newData.resId] or respawnSeconds['default']
+  end
   return newData.ts + incSeconds
 end
 
@@ -444,7 +512,7 @@ function HamsterGather:markRespawnConflicts(resCat, mapResRespawns, newData, new
     if r[1] < timestampBegin then break end
     if r[2] == newData.map and r[5] == newData.resId then
       --self:Debug("found history:", r[3], r[4])
-      local _, respawnId = self:FindRespawn(mapResRespawns, r[3], r[4], resCat)
+      local _, respawnId = self:findRespawn(mapResRespawns, r[3], r[4], resCat)
       if respawnId ~= nil then -- 有可能不存在
         self:markConflict(#mapResRespawns, conflicts, newRespawnId, respawnId)
       end
@@ -471,7 +539,7 @@ function HamsterGather:markConflict(respawnCnt, conflicts, respawnId1, respawnId
   end
 end
 
-function HamsterGather:FindRespawn(mapResRespawns, x, y, resCat)
+function HamsterGather:findRespawn(mapResRespawns, x, y, resCat)
   for i, respawn in ipairs(mapResRespawns) do
     local distancePower2 = (x - respawn[1]) * (x - respawn[1]) + (y - respawn[2]) * (y - respawn[2])
     if distancePower2 < resCat.sameDistancePower2 then
@@ -719,7 +787,7 @@ function HamsterGather:updateMinimap()
                 pin:SetWidth(14)
                 pin:SetHeight(14)
                 local t = pin.texture
-                t:SetTexture(string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId))
+                t:SetTexture(string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", respawn[7] or resId))
                 t:SetTexCoord(0, 1, 0, 1)
                 t:SetAllPoints(pin)
                 if respawn[6] and now < respawn[6] then
@@ -805,7 +873,7 @@ function HGWorldMapDataProvider:RefreshAllData()
         for resId, resShowData in pairs(resInMap) do
           if resShowData.show then
             for respawnId, respawn in ipairs(resShowData.respawns) do
-              local pin = map:AcquirePin("HamsterGatherMapPinTemplate", respawn[1]/100.0, respawn[2]/100.0, resId)
+              local pin = map:AcquirePin("HamsterGatherMapPinTemplate", respawn, resId)
               table.insert(worldmapPins, pin)
              	pin:SetAlpha(0.6)
              	pin:EnableMouse(true)
@@ -832,13 +900,14 @@ function HamsterGatherWorldMapPinMixin:OnLoad()
 	self:SetScalingLimits(1, 1.0, 1.2)
 end
 
-function HamsterGatherWorldMapPinMixin:OnAcquired(x, y, resId)
+function HamsterGatherWorldMapPinMixin:OnAcquired(respawn, resId)
 	self.title = string.format("HGWorldMapPin%d", #worldmapPins)
-	self.resId = resId
-	self:SetPosition(x, y)
+	self:SetPosition(respawn[1]/100.0, respawn[2]/100.0)
 	self:SetHeight(12)
 	self:SetWidth(12)
 	self:SetAlpha(0.8)
+  resId = respawn[7] or resId
+	self.resId = resId
   local iconPath = string.format("Interface\\AddOns\\HamsterGather\\Icons\\%d.tga", resId)
 	self.texture:SetTexture(iconPath)
 	self.texture:SetTexCoord(0, 1, 0, 1)
