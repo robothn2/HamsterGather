@@ -490,14 +490,17 @@ function HamsterGather:updateResDB(resCat, data, noHistory)
   -- 更新或增加资源采集点(respawn)
   local respawn, respawnId = self:findRespawn(respawns, data.x, data.y, resCat)
   if respawn then
-    respawn[3] = data.ts
-    respawn[4] = data.sender
+    -- 因为数据有可能来源于其他玩家同步，所以仅在对方数据比自己新时才做更新
+    if data.ts > respawn[3] then
+      respawn[3] = data.ts
+      respawn[4] = data.sender
+      respawn[7] = alterId
+    end
   else
-    respawn = {data.x, data.y, data.ts, data.sender}
+    respawn = {data.x, data.y, data.ts, data.sender, nil, nil, alterId}
     table.insert(respawns, respawn)
     respawnId = #respawns
-  end
-  respawn[7] = alterId
+  end  
 
   self:markRespawnConflicts(resCat, respawns, data, respawnId)
 
