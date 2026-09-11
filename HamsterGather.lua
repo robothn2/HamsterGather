@@ -280,22 +280,20 @@ function HamsterGather:OnEvent(event, ...)
     -- 通道施法过程中，CURSOR_CHANGED 才会频繁触发，这里是为钓鱼这种通道施法所用
     -- 在通道施法时检查法术ID，如果是关注的法术，就收集交互目标的名称
     local spellId = select(8, UnitChannelInfo("player"))
-    if spellId then
-      local resCat = self.resCatsBySpellId[spellId]
-      if resCat then
-        local target = GameTooltipTextLeft1:GetText()
-        if target then
-          self.current.interactives[target] = GetServerTime()
-        end
-      end
+    if spellId and self.resCatsBySpellId[spellId] then
+      self:updateInteractive()
     end
   elseif event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
     local caster, _, spellId = ...
     if caster ~= 'player' then return end
     local resCat = self.resCatsBySpellId[spellId]
     if not resCat then return end
-    -- 施法成功后，清除 60 秒前的所有交互目标
+
+    -- 施法成功后，记录当前交互目标
+    self:updateInteractive()
+
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
+      -- 施法成功后，清除 60 秒前的所有交互目标
       local oldest = GetServerTime() - 60
       local interactives = self.current.interactives
       for k, ts in pairs(interactives) do
@@ -362,6 +360,13 @@ function HamsterGather:getInteractiveSource(resCat)
     if detail.default then
       return name
     end
+  end
+end
+
+function HamsterGather:updateInteractive()
+  local target = GameTooltipTextLeft1:GetText()
+  if target then
+    self.current.interactives[target] = GetServerTime()
   end
 end
 
